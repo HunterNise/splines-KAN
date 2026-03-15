@@ -2,5 +2,6 @@ tests/__pycache__/
 
 data/
 
-tasks/hello_KAN/figures/
-tasks/hello_KAN/model/
+**/outputs/
+**/figures/
+**/model/
