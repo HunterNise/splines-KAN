@@ -42,13 +42,14 @@ def intervals_to_knots(intervals: torch.Tensor) -> torch.Tensor:
 #   from an initial knot vector to a final knot vector that minimizes the B-spline error.
 
 class NN(nn.Module):
-    def __init__(self, num_knots=5):    # class constructor with number of (internal) knots as argument
+    def __init__(self, num_knots=5):    # class constructor with number of (non-clamped) knots as argument
         super().__init__()              # call parent constructor
-        self.num_knots = num_knots      # store number of knots as an instance variable for later use
+        self.num_knots = num_knots      # store number of knots as object variable for later use
         # the knot vector must be non-decreasing, so we predict intervals between knots and then convert back to knots
         num_intervals = num_knots - 1
-        self.linear1 = nn.Linear(num_intervals, 64)
-        self.linear2 = nn.Linear(64, num_intervals)
+        num_neurons = 64
+        self.linear1 = nn.Linear(num_intervals, num_neurons)
+        self.linear2 = nn.Linear(num_neurons, num_intervals)
 
     def forward(self, x):
         x = knots_to_intervals(x)   # convert knots to intervals for the network to predict
@@ -59,8 +60,18 @@ class NN(nn.Module):
         x = intervals_to_knots(x)   # convert back to a non-decreasing vector of knots
         return x
 
-model = NN(num_knots=5).to(device)  # create model instance and move to device
-print(model)                        # print model architecture
+num_knots = 5                       # number of knots (without repetitions/clamping)
+model = NN(num_knots).to(device)    # create model instance and move to device
+
+# print architecture and number of parameters
+print("\nModel architecture:")
+print(model)
+print("\nModel parameters:")
+for name, module in model.named_modules():
+    if module == model:
+        name = "Total"
+    print(f"{name}: {sum(param.numel() for param in module.parameters()):>,.0f}")
+print()
 
 # --------------------------------------------------
 
@@ -102,7 +113,7 @@ def make_grid(points, method="uniform"):
 
 
 # Assemble matrix of B-spline basis functions evaluated at the parameter grid for the given knots and degree.
-def bspline_basis(t_grid, knots, degree, soft=False, k=100.0):
+def bspline_basis(t_grid, knots, degree, soft=False, k=1000.0):
     """
     Vectorized Cox--de Boor B-spline basis (autograd-friendly).
 
@@ -119,14 +130,11 @@ def bspline_basis(t_grid, knots, degree, soft=False, k=100.0):
     -------
     B : (N, M) where M = K - degree - 1
     """
-    t_grid = t_grid.to(knots.dtype)
     N = t_grid.shape[0]     # number of evaluation points
     K = knots.shape[0]      # number of knots
     m = K - 1               # number of intervals between knots, which is also the number of degree-0 basis functions
     if m <= 0:
         return torch.zeros((N, 0), dtype=t_grid.dtype, device=t_grid.device)
-
-    # degree-0 basis (vectorized)
 
     # lefts: knots[0..K-2], rights: knots[1..K-1]
     lefts = knots[:-1]          # shape (m,)
@@ -134,21 +142,46 @@ def bspline_basis(t_grid, knots, degree, soft=False, k=100.0):
     # expand t_grid to (N,1) for broadcasting against (m,) intervals
     t_expand = t_grid.unsqueeze(1)   # (N,1)
 
+    # degree-0 basis (vectorized)
     # compute indicator functions for each interval [lefts[j], rights[j]) for j=0..m-1
+
+    # hard mask: intervals [left, right) except last interval which includes right endpoint
+    mask = (t_expand >= lefts) & (t_expand < rights)    # (N,m) boolean
+    
+    # find the last non-degenerate interval (where lefts[j] < rights[j])
+    last_nondegen_idx = -1
+    for jj in range(len(lefts) - 1, -1, -1):    # loop from the end
+        if lefts[jj] < rights[jj]:
+            last_nondegen_idx = jj
+            break
+    
+    # include right endpoint for the last non-degenerate interval
+    if last_nondegen_idx >= 0:
+        mask_last = t_grid == rights[last_nondegen_idx] # (N,) boolean
+        mask = mask.clone()                             # create a copy to avoid in-place modification which may cause issues with autograd
+        mask[:, last_nondegen_idx] = mask[:, last_nondegen_idx] | mask_last     # logical OR between mask (<) and mask_last (==) for the last interval
+    
+    hard = mask.to(dtype=knots.dtype)      # convert boolean to float
+
     if not soft:
-        # hard mask: intervals [left, right) except last interval which includes right endpoint
-        mask = (t_expand >= lefts) & (t_expand < rights)    # (N,m) boolean
-        # include right endpoint for last interval
-        mask_last = t_grid == rights[-1]                    # (N,) boolean
-        mask = mask.clone()                     # create a copy to avoid in-place modification which may cause issues with autograd
-        mask[:, -1] = mask[:, -1] | mask_last   # logical OR between mask (<) and mask_last (==) for the last interval
-        Bprev = mask.to(dtype=knots.dtype)      # convert boolean to float
+        Bprev = hard
     else:
         # soft mask: use product of two sigmoids -> smooth approximation of indicator
-        # torch.sigmoid : [-inf,+inf] -> [0,1], 0 |-> 1/2, large positive -> ~1, large negative -> ~0
+        # torch.sigmoid : [-inf,+inf] -> [0,1],  0 |-> 1/2,  large positive -> ~1,  large negative -> ~0
         left_term  = torch.sigmoid(k * (t_expand - lefts))      # (N,m)
         right_term = torch.sigmoid(k * (rights - t_expand))     # (N,m)
-        Bprev = (left_term * right_term)
+        soft_vals = (left_term * right_term)
+        
+        # zero out zero-width intervals — they should contribute nothing,
+        # but sigmoid(0)*sigmoid(0)=0.25 would otherwise corrupt the recursion
+        non_degenerate = (rights > lefts).unsqueeze(0)          # (1, m) bool
+        soft_vals = soft_vals * non_degenerate
+        hard      = hard * non_degenerate
+
+        # Straight-Through Estimator (STE):
+        #   in the forward pass this equals hard exactly;
+        #   in the backward pass autograd sees only soft_vals (hard does not depend on knots, so it has zero gradients)
+        Bprev = hard + (soft_vals - soft_vals.detach())
 
     # recursion for p = 1..degree
     # at recursion p we should produce shape (N, K-p-1)
@@ -211,7 +244,7 @@ def solve_control_points(B, X, reg=1e-6):
 # Training loop to optimize the neural network parameters to minimize the B-spline fitting loss.
 
 def train(model, points, degree, param="uniform",
-          max_iter=1000, tol=1e-6, lr=0.001):
+          max_iter=1000, tol=1e-6, lr=1e-3):
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)     # method to update model parameters based on computed gradients
     losses = []     # vector to store loss value after each iteration
     
@@ -222,33 +255,25 @@ def train(model, points, degree, param="uniform",
     
     # loop until reaching maximum number of iterations or the error is below the specified tolerance
     for iter in range(max_iter):
-        ### print(f"\n--------------------\n\nIteration {iter:>5n}")   ###
-        ### # print model parameters (weights of linear layers) for debugging
-        ### for name, param in model.named_parameters():    ###
-        ###     print(f"Parameter {name}:\n{param.data}")   ###
-
-        # initial guess for (internal) knots (uniformly spaced)
+        # initial guess for knots (uniformly spaced)
         initial_knots = torch.linspace(0., 1., model.num_knots, 
                                        dtype=points.dtype, device=points.device)
-        ### print(f"Initial knots:\n{initial_knots}")   ###
+        
         # predict final knots from the model given the initial knots (forward pass)
         pred_knots = model(initial_knots)
-        ### print(f"Predicted knots:\n{pred_knots}")    ###
+        
         # pad the internal knots to open/clamped knots
-        # need multiplicity p+1, but the first 0 and last 1 are already in due to softmax
+        # to avoid numerical errors from the cumsum + softmax, we throw away the first and last predicted knots and replace them with exact 0 and 1
         full_knots = torch.cat((
-                        torch.zeros(degree, dtype=pred_knots.dtype, device=pred_knots.device), 
-                        pred_knots, 
-                        torch.ones(degree, dtype=pred_knots.dtype, device=pred_knots.device)
+                        torch.zeros(degree + 1, dtype=pred_knots.dtype, device=pred_knots.device),
+                        pred_knots[1:-1],      # interior knots only, guaranteed in (0, 1)
+                        torch.ones( degree + 1, dtype=pred_knots.dtype, device=pred_knots.device)
                      ))
-        ### print(f"Full knots:\n{full_knots}")         ###
         
         # compute the B-spline basis matrix evaluated at the parameter grid for the predicted knots and given degree
-        basis_matrix = bspline_basis(t_grid, full_knots, degree, soft=False)
-        ### print(f"Basis matrix:\n{basis_matrix}")     ###
+        basis_matrix = bspline_basis(t_grid, full_knots, degree, soft=False, k=1000.0)
         # solve for control points that best fit the data points given the basis matrix (least squares)
-        controls = solve_control_points(basis_matrix, points)
-        ### print(f"Controls:\n{controls}")             ###
+        controls = solve_control_points(basis_matrix, points, reg=1e-6)
 
         # compute loss as sum of distances (norm2) between data points and points on the B-spline curve
         loss = torch.sum((points - basis_matrix @ controls) ** 2)
@@ -280,16 +305,16 @@ def train(model, points, degree, param="uniform",
 # launch training and print final knots
 degree = 3
 losses, final_knots, controls = train(model, points, degree, param="uniform")
-print("Final knots:\n", final_knots)
+print("\nFinal knots:\n", final_knots)
 final_err = losses[-1]
-print(f"Final error: {final_err:.6f}")
+print(f"\nFinal error: {final_err:.6f}")
 
 # --------------------------------------------------
 
 import matplotlib.pyplot as plt
 import os
 
-# plot losses
+# plot losses (log scale)
 plt.figure(figsize=(8, 4))
 plt.plot(losses, label="Training Loss")
 plt.yscale("log")
@@ -310,9 +335,19 @@ plt.savefig(os.path.join(output_dir, "training_loss.png"))
 # Recursive implementation of the Cox--de Boor formula for evaluating a single B-spline basis function at a given parameter t.
 def bspline_basis_eval(j, p, t, knots):
     if p == 0:
-        # last interval includes right endpoint to ensure partition of unity, but only for the last basis function
-        if j == (len(knots) - 1) - 1:
-            return 1.0 if knots[j] <= t <= knots[j + 1] else 0.0
+        # 0-degree basis functions are indicator functions for the intervals defined by the knots
+        # support = [left, right) except the last non-degenerate interval which includes the right endpoint
+
+        # find last non-degenerate interval
+        last_nondegen_idx = -1
+        for jj in range(len(knots) - 2, -1, -1):    # loop from the end
+            if knots[jj] < knots[jj + 1]:
+                last_nondegen_idx = jj
+                break
+        
+        # include right endpoint of last non-degenerate interval
+        if j == last_nondegen_idx and t == knots[j + 1]:
+            return 1.0
         else:
             return 1.0 if knots[j] <= t < knots[j + 1] else 0.0
     else:
@@ -335,22 +370,23 @@ def bspline_eval(t, knots, degree, controls):
 t_grid = np.linspace(0., 1., 1000)  # dense grid for smooth curve
 curve_points = np.array([bspline_eval(t, final_knots, degree, controls) for t in t_grid])
 knot_points  = np.array([bspline_eval(u, final_knots, degree, controls) for u in final_knots])
-### print("Curve points:\n", curve_points)    ###
-### print("Controls:\n", controls)            ###
 
-plt.figure(figsize=(10, 10))
+plt.figure(figsize=(10, 8))
 plt.plot(points[:, 0], points[:, 1], 
-            marker='o', linestyle='none', color='gray', label='Data Points')
+            marker='o', linestyle='none', color='gray', markersize=4, label='Data Points')
 plt.plot(curve_points[:, 0], curve_points[:, 1], 
             linestyle='-', color='blue', label='B-spline Curve')
 plt.plot(knot_points[:, 0], knot_points[:, 1], 
-            marker='^', linestyle='none', color='green', label='Knot Points')
+            marker='^', linestyle='none', color='green', markersize=10, label='Knot Points')
 
-plt.legend()
+# make room on the right for legend/text
+plt.subplots_adjust(right=0.75)   # leave 25% width on the right for annotations
+# place legend in the reserved right margin
+plt.legend(loc='upper left', bbox_to_anchor=(1.02, 1.0), borderaxespad=0)
 # add a red rectangle in the lower right corner to display the final error
-plt.text(0.95, 0.05, f"Error: {final_err:.6f}", 
-            transform=plt.gca().transAxes,
-            fontsize=12, color='red', ha='right', va='bottom',
+plt.text(1.03, 0.02, f"Error: {final_err:.2e}", 
+            transform=plt.gca().transAxes,  # convert to percentage coordinates of the axes
+            fontsize=12, color='red', ha='left', va='bottom',
             bbox=dict(boxstyle='round,pad=0.5', facecolor='white', edgecolor='red', alpha=0.8))
 
 plt.grid(True)
