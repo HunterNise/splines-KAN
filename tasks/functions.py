@@ -844,10 +844,11 @@ def plot_loss(losses, log=True,
     plt.tight_layout()
 
     plt.savefig(os.path.join(path, name))   # save plot to external file
+    plt.close()
 
 
-def plot_curve(knots, degree, controls, 
-               path=None, name="curve.png"):
+def plot_curve_2D(knots, degree, controls, 
+                  path=None, name="curve.png"):
     t_grid = np.linspace(0., 1., 1000)  # dense grid for smooth curve
     curve_points = np.array([bspline_eval(t, knots, degree, controls) for t in t_grid])
     knot_points  = np.array([bspline_eval(u, knots, degree, controls) for u in knots])
@@ -864,10 +865,10 @@ def plot_curve(knots, degree, controls,
     plt.tight_layout()
 
     plt.savefig(os.path.join(path, name))   # save plot to external file
+    plt.close()
 
-
-def plot_curve_fit(points, knots, degree, controls, error, 
-                   path=None, name="curve_fit.png"):
+def plot_curve_fit_2D(points, knots, degree, controls, error, 
+                      path=None, name="curve_fit.png"):
     t_grid = np.linspace(0., 1., 1000)  # dense grid for smooth curve
     curve_points = np.array([bspline_eval(t, knots, degree, controls) for t in t_grid])
     knot_points  = np.array([bspline_eval(u, knots, degree, controls) for u in knots])
@@ -895,3 +896,7 @@ def plot_curve_fit(points, knots, degree, controls, error,
     plt.tight_layout()
 
     plt.savefig(os.path.join(path, name))   # save plot to external file
+    plt.close()
+
+plot_curve = plot_curve_2D
+plot_curve_fit = plot_curve_fit_2D

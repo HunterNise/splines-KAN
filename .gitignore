@@ -1,7 +1,7 @@
-tests/__pycache__/
+**/__pycache__/
 
 data/
 
-**/outputs/
+**/outputs*/
 **/figures/
 **/model/
