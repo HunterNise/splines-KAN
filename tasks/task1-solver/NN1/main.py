@@ -158,11 +158,15 @@ for param in ["uniform", "chord_length", "centripetal"]:
                 name = "Total"
             f.write(f"{name}: {sum(param.numel() for param in module.parameters()):>,.0f}\n")
 
+    # loop over all files in the input directory, sorted by name
     for file in tqdm(sorted(os.scandir(dir), key=lambda f: f.name), ncols=100, desc="Processing files"):
         # load points from text file
         path = os.path.join(dir, file)
         name, _ = os.path.splitext(file.name)
         points = np.loadtxt(path)
+
+        # reset model parameters before each training
+        model.apply(lambda m: m.reset_parameters() if hasattr(m, "reset_parameters") else None)
 
         # launch training
         #print(f"\nTraining on {name}:\n")
