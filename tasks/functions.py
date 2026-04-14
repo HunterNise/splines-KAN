@@ -43,7 +43,7 @@ def knots_to_intervals_naive(knots):
     Returns
     -------
     intervals : list of float
-        A vector of intervals between knots (positive values).
+        A vector of intervals between knots (non-negative values).
 
     Notes
     -----
@@ -51,9 +51,21 @@ def knots_to_intervals_naive(knots):
     - The output `intervals` will have one less element than `knots`.
 
     """
+    if __debug__:
+        knots = np.asarray(knots)
+        assert knots.ndim == 1, "Input knots should be a 1D array-like"
+        assert len(knots) >= 2, "Need at least two knots to compute intervals"
+        assert np.all(knots[:-1] <= knots[1:]), "Knots must be non-decreasing"
+    
     intervals = []
     for i in range(len(knots) - 1):
         intervals.append(knots[i + 1] - knots[i])
+    
+    if __debug__:
+        assert isinstance(intervals, list), "Output intervals should be a list"
+        assert len(intervals) == len(knots) - 1, "Number of intervals should be one less than number of knots"
+        assert all(interval >= 0 for interval in intervals), "Intervals must be non-negative"
+    
     return intervals
 
 def knots_to_intervals_torch(knots: torch.Tensor) -> torch.Tensor:
@@ -71,7 +83,7 @@ def knots_to_intervals_torch(knots: torch.Tensor) -> torch.Tensor:
     Returns
     -------
     intervals : torch.Tensor (m,) float
-        A vector of intervals between knots (positive values).
+        A vector of intervals between knots (non-negative values).
 
     Notes
     -----
@@ -79,7 +91,19 @@ def knots_to_intervals_torch(knots: torch.Tensor) -> torch.Tensor:
     - The output `intervals` will have one less element than `knots`.
 
     """
-    return knots[1:] - knots[:-1]   # all but the first minus all but the last
+    if __debug__:
+        assert knots.ndim == 1, "Input knots should be a 1D tensor"
+        assert knots.shape[0] >= 2, "Need at least two knots to compute intervals"
+        assert torch.all(knots[:-1] <= knots[1:]), "Knots must be non-decreasing"
+
+    intervals = knots[1:] - knots[:-1]   # all but the first minus all but the last
+
+    if __debug__:
+        assert intervals.ndim == 1, "Output intervals should be a 1D tensor"
+        assert intervals.shape[0] == knots.shape[0] - 1, "Number of intervals should be one less than number of knots"
+        assert torch.all(intervals >= 0), "Intervals must be non-negative"
+    
+    return intervals
 
 knots_to_intervals = knots_to_intervals_torch
 
@@ -96,7 +120,7 @@ def intervals_to_knots_naive(intervals):
     Parameters
     ----------
     intervals : list of float | np.ndarray (m,) float
-        A vector of intervals between knots (positive values).
+        A vector of intervals between knots (non-negative values).
     
     Returns
     -------
@@ -111,9 +135,22 @@ def intervals_to_knots_naive(intervals):
     - The final knot value may not be exact due to floating point precision.
     
     """
-    knots = [0]
+    if __debug__:
+        intervals = np.asarray(intervals)
+        assert intervals.ndim == 1, "Input intervals should be a 1D array-like"
+        assert len(intervals) >= 1, "Need at least one interval to compute knots"
+        assert np.all(intervals >= 0), "Intervals must be non-negative"
+    
+    knots = [0.0]
     for interval in intervals:
         knots.append(knots[-1] + interval)
+
+    if __debug__:
+        assert isinstance(knots, list), "Output knots should be a list"
+        assert len(knots) == len(intervals) + 1, "Number of knots should be one more than number of intervals"
+        assert all(knots[i] <= knots[i + 1] for i in range(len(knots) - 1)), "Knots must be non-decreasing"
+        assert knots[0] == 0.0, "First knot should be 0"
+    
     return knots
 
 def intervals_to_knots_torch(intervals: torch.Tensor) -> torch.Tensor:
@@ -127,7 +164,7 @@ def intervals_to_knots_torch(intervals: torch.Tensor) -> torch.Tensor:
     Parameters
     ----------
     intervals : torch.Tensor (m,) float
-        A vector of intervals between knots (positive values).
+        A vector of intervals between knots (non-negative values).
     
     Returns
     -------
@@ -142,8 +179,21 @@ def intervals_to_knots_torch(intervals: torch.Tensor) -> torch.Tensor:
     - The final knot value may not be exact due to floating point precision.
     
     """
+    if __debug__:
+        assert intervals.ndim == 1, "Input intervals should be a 1D tensor"
+        assert intervals.shape[0] >= 1, "Need at least one interval to compute knots"
+        assert torch.all(intervals >= 0), "Intervals must be non-negative"
+    
     zero = torch.zeros(1, dtype=intervals.dtype, device=intervals.device)
-    return torch.cat((zero, torch.cumsum(intervals, dim=0)))
+    knots = torch.cat((zero, torch.cumsum(intervals, dim=0)))
+
+    if __debug__:
+        assert knots.ndim == 1, "Output knots should be a 1D tensor"
+        assert knots.shape[0] == intervals.shape[0] + 1, "Number of knots should be one more than number of intervals"
+        assert torch.all(knots[:-1] <= knots[1:]), "Knots must be non-decreasing"
+        assert knots[0] == 0.0, "First knot should be 0"
+    
+    return knots
 
 intervals_to_knots = intervals_to_knots_torch
 
@@ -174,9 +224,24 @@ def uniform_params_naive(points):
     -----
     - The input `points` should have at least 2 points to compute parameters.
     - The output `params` will have the same number of elements as `points`.
+    - The output `params` will have non-decreasing elements in the range [0, 1], with the first one being 0 and the last one being 1.
     
     """
-    return np.linspace(0.0, 1.0, len(points))
+    if __debug__:
+        points = np.asarray(points)
+        assert points.ndim == 2, "Input points should be a 2D array-like (N, dim)"
+        assert len(points) >= 2, "Need at least two points to compute parameters"
+
+    params = np.linspace(0.0, 1.0, len(points))
+
+    if __debug__:
+        assert params.ndim == 1, "Output parameters should be a 1D array"
+        assert params.shape[0] == len(points), "Number of parameters should match number of points"
+        assert params[0] == 0.0 and params[-1] == 1.0, "First parameter should be 0 and last parameter should be 1"
+        assert np.all((params >= 0) & (params <= 1)), "Parameters should be in the range [0, 1]"
+        assert np.all(np.diff(params) >= 0), "Parameters should be non-decreasing"
+    
+    return params
 
 def uniform_params_torch(points: torch.Tensor) -> torch.Tensor:
     """
@@ -199,11 +264,25 @@ def uniform_params_torch(points: torch.Tensor) -> torch.Tensor:
     -----
     - The input `points` should have at least 2 points to compute parameters.
     - The output `params` will have the same number of elements as `points`.
+    - The output `params` will have non-decreasing elements in the range [0, 1], with the first one being 0 and the last one being 1.
     
     """
+    if __debug__:
+        assert points.ndim == 2, "Input points should be a 2D tensor (N, dim)"
+        assert points.shape[0] >= 2, "Need at least two points to compute parameters"
+
     # create a linearly spaced vector of length N (number of points) from 0 to 1
-    return torch.linspace(0., 1., len(points), 
-                          dtype=points.dtype, device=points.device)
+    params = torch.linspace(0., 1., len(points), 
+                            dtype=points.dtype, device=points.device)
+
+    if __debug__:
+        assert params.ndim == 1, "Output parameters should be a 1D tensor"
+        assert params.shape[0] == points.shape[0], "Number of parameters should match number of points"
+        assert params[0].item() == 0.0 and params[-1].item() == 1.0, "First parameter should be 0 and last parameter should be 1"
+        assert torch.all((params >= 0) & (params <= 1)), "Parameters should be in the range [0, 1]"
+        assert torch.all(params[:-1] <= params[1:]), "Parameters should be non-decreasing"
+    
+    return params
 
 uniform_params = uniform_params_torch
 
@@ -232,16 +311,31 @@ def chord_length_params_naive(points):
     -----
     - The input `points` should have at least 2 points to compute parameters.
     - The output `params` will have the same number of elements as `points`.
+    - The output `params` will have non-decreasing elements in the range [0, 1], with the first one being 0 and the last one being 1.
     - If all points are identical, the output will be the same as uniform parameters.
 
     """
-    pts = np.asarray(points)                            # convert to numpy array if not already
-    d = np.linalg.norm(np.diff(pts, axis=0), axis=1)    # ||p[j+1] - p[j]|| for j in [0, N-2]
-    L = d.sum()                                         # total length of the curve (sum of distances)
+    points = np.asarray(points)                             # convert to numpy array if not already
+    
+    if __debug__:
+        assert points.ndim == 2, "Input points should be a 2D array-like (N, dim)"
+        assert len(points) >= 2, "Need at least two points to compute parameters"
+    
+    d = np.linalg.norm(np.diff(points, axis=0), axis=1)     # ||p[j+1] - p[j]|| for j in [0, N-2]
+    cum = np.cumsum(d)                                      # cumulative sum of distances
+    L = cum[-1]                                             # total length of the curve (last value of cumulative distances)
     if L == 0:
         return uniform_params_naive(points)
-    cum = np.concatenate(([0.0], np.cumsum(d)))         # prepend 0 and compute cumulative sum of distances
-    return cum / L                                      # normalize to [0, 1]
+    params = np.concatenate(([0.0], cum / L))               # prepend 0 and normalize to [0, 1]
+    
+    if __debug__:
+        assert params.ndim == 1, "Output parameters should be a 1D array"
+        assert params.shape[0] == len(points), "Number of parameters should match number of points"
+        assert params[0] == 0.0 and params[-1] == 1.0, "First parameter should be 0 and last parameter should be 1"
+        assert np.all((params >= 0) & (params <= 1)), "Parameters should be in the range [0, 1]"
+        assert np.all(params[:-1] <= params[1:]), "Parameters should be non-decreasing"
+    
+    return params
 
 def chord_length_params_torch(points: torch.Tensor) -> torch.Tensor:
     """
@@ -266,16 +360,30 @@ def chord_length_params_torch(points: torch.Tensor) -> torch.Tensor:
     -----
     - The input `points` should have at least 2 points to compute parameters.
     - The output `params` will have the same number of elements as `points`.
+    - The output `params` will have non-decreasing elements in the range [0, 1], with the first one being 0 and the last one being 1.
     - If all points are identical, the output will be the same as uniform parameters.
 
     """
+    if __debug__:
+        assert points.ndim == 2, "Input points should be a 2D tensor (N, dim)"
+        assert points.shape[0] >= 2, "Need at least two points to compute parameters"
+
     distances = torch.sqrt(torch.sum((points[1:] - points[:-1]) ** 2, dim=1))   # compute distances between consecutive points
     cumulative_distances = torch.cumsum(distances, dim=0)                       # cumulative sum of distances to get the parameter values before normalization
     total_distance = cumulative_distances[-1]                                   # total length of the curve (last value of cumulative distances)
     if total_distance == 0:
         return uniform_params_torch(points)
     zero = torch.zeros(1, dtype=points.dtype, device=points.device)             # create a zero tensor to prepend to the cumulative distances
-    return torch.cat((zero, cumulative_distances / total_distance))             # prepend 0 and normalize to [0, 1]
+    params = torch.cat((zero, cumulative_distances / total_distance))           # prepend 0 and normalize to [0, 1]
+
+    if __debug__:
+        assert params.ndim == 1, "Output parameters should be a 1D tensor"
+        assert params.shape[0] == points.shape[0], "Number of parameters should match number of points"
+        assert params[0].item() == 0.0 and params[-1].item() == 1.0, "First parameter should be 0 and last parameter should be 1"
+        assert torch.all((params >= 0) & (params <= 1)), "Parameters should be in the range [0, 1]"
+        assert torch.all(params[:-1] <= params[1:]), "Parameters should be non-decreasing"
+    
+    return params
 
 chord_length_params = chord_length_params_torch
 
@@ -304,16 +412,31 @@ def centripetal_params_naive(points):
     -----
     - The input `points` should have at least 2 points to compute parameters.
     - The output `params` will have the same number of elements as `points`.
+    - The output `params` will have non-decreasing elements in the range [0, 1], with the first one being 0 and the last one being 1.
     - If all points are identical, the output will be the same as uniform parameters.
 
     """
-    pts = np.asarray(points)
-    rd = np.sqrt(np.linalg.norm(np.diff(pts, axis=0), axis=1))  # same as chord length but with sqrt of distances
-    S = rd.sum()
+    points = np.asarray(points)
+
+    if __debug__:
+        assert points.ndim == 2, "Input points should be a 2D array-like (N, dim)"
+        assert len(points) >= 2, "Need at least two points to compute parameters"
+
+    rd = np.sqrt(np.linalg.norm(np.diff(points, axis=0), axis=1))   # same as chord length but with sqrt of distances
+    cum = np.cumsum(rd)
+    S = cum[-1]
     if S == 0:
         return uniform_params_naive(points)
-    cum = np.concatenate(([0.0], np.cumsum(rd)))
-    return cum / S
+    params = np.concatenate(([0.0], cum / S))
+
+    if __debug__:
+        assert params.ndim == 1, "Output parameters should be a 1D array"
+        assert params.shape[0] == len(points), "Number of parameters should match number of points"
+        assert params[0] == 0.0 and params[-1] == 1.0, "First parameter should be 0 and last parameter should be 1"
+        assert np.all((params >= 0) & (params <= 1)), "Parameters should be in the range [0, 1]"
+        assert np.all(params[:-1] <= params[1:]), "Parameters should be non-decreasing"
+    
+    return params
 
 def centripetal_params_torch(points: torch.Tensor) -> torch.Tensor:
     """
@@ -338,16 +461,30 @@ def centripetal_params_torch(points: torch.Tensor) -> torch.Tensor:
     -----
     - The input `points` should have at least 2 points to compute parameters.
     - The output `params` will have the same number of elements as `points`.
+    - The output `params` will have non-decreasing elements in the range [0, 1], with the first one being 0 and the last one being 1.
     - If all points are identical, the output will be the same as uniform parameters.
 
     """
+    if __debug__:
+        assert points.ndim == 2, "Input points should be a 2D tensor (N, dim)"
+        assert points.shape[0] >= 2, "Need at least two points to compute parameters"
+
     distances = torch.sqrt(torch.sum((points[1:] - points[:-1]) ** 2, dim=1))
     cumulative_distances = torch.cumsum(torch.sqrt(distances), dim=0)   # same as chord length but with sqrt of distances
     total_distance = cumulative_distances[-1]
     if total_distance == 0:
         return uniform_params_torch(points)
     zero = torch.zeros(1, dtype=points.dtype, device=points.device)
-    return torch.cat((zero, cumulative_distances / total_distance))
+    params = torch.cat((zero, cumulative_distances / total_distance))
+
+    if __debug__:
+        assert params.ndim == 1, "Output parameters should be a 1D tensor"
+        assert params.shape[0] == points.shape[0], "Number of parameters should match number of points"
+        assert params[0].item() == 0.0 and params[-1].item() == 1.0, "First parameter should be 0 and last parameter should be 1"
+        assert torch.all((params >= 0) & (params <= 1)), "Parameters should be in the range [0, 1]"
+        assert torch.all(params[:-1] <= params[1:]), "Parameters should be non-decreasing"
+    
+    return params
 
 centripetal_params = centripetal_params_torch
 
@@ -376,8 +513,8 @@ def make_grid(points, method="uniform"):
     -----
     - The input `points` should have at least 2 points to compute parameters.
     - The output `params` will have the same number of elements as `points`.
-    - The generated parameters will be in the range [0, 1].
-        The first parameter will be 0 and the last parameter will be 1, with intermediate values determined by the chosen method.
+    - The output `params` will have non-decreasing elements in the range [0, 1], with the first one being 0 and the last one being 1.
+      The intermediate values are determined by the chosen method.
     - If the specified method is not recognized, a ValueError will be raised.
     
     """
@@ -434,6 +571,22 @@ def bspline_basis_matrix(t_grid, knots, degree, soft=False, k=1000.0):
     - The input `knots` should have at least degree + 2 elements to define the basis functions.
 
     """
+    if __debug__:
+        assert degree >= 0, "Degree must be non-negative"
+        
+        assert t_grid.ndim == 1, "t_grid should be a 1D tensor"
+        assert t_grid.shape[0] >= 1, "t_grid should have at least one element to evaluate basis functions"
+        
+        assert knots.ndim == 1, "Knots should be a 1D tensor"
+        assert knots.shape[0] >= degree + 2, "Need at least degree + 2 knots to define the basis functions"
+        assert torch.all(knots[:-1] <= knots[1:]), "Knots must be non-decreasing"
+        
+        assert t_grid.dtype == knots.dtype and t_grid.device == knots.device, "t_grid and knots must have the same dtype and device"
+        #assert torch.all((t_grid >= knots[0]) & (t_grid <= knots[-1])), "t_grid values should be within the range of knots"
+        
+        assert isinstance(soft, bool), "Soft should be a boolean value"
+        assert k > 0, "Steepness k must be positive"
+
     N = t_grid.shape[0]     # number of evaluation points
     K = knots.shape[0]      # number of knots
     m = K - 1               # number of intervals between knots, which is also the number of degree-0 basis functions
@@ -529,6 +682,13 @@ def bspline_basis_matrix(t_grid, knots, degree, soft=False, k=1000.0):
         Bp = left_term + right_term                 # (N, M)
         Bprev = Bp                                  # allocate new tensor each degree
     
+    if __debug__:
+        assert Bprev.ndim == 2, "Output basis matrix should be 2D"
+        assert Bprev.shape[0] == N, "Number of rows in basis matrix should match number of evaluation points"
+        assert Bprev.shape[1] == K - degree - 1, "Number of columns in basis matrix should be K - degree - 1"
+        assert torch.all(Bprev >= 0), "Basis function values should be non-negative"
+        # Note: the sum of basis functions at each t_grid[i] should be 1, but we won't assert that here due to potential numerical issues and the fact that it may not hold exactly when soft=True.
+
     return Bprev   # shape (N, K-degree-1)
 
 
@@ -558,16 +718,32 @@ def solve_control_points(B, X, reg=1e-6):
         Control points. Each row corresponds to a control point in d-dimensional space.
     
     """
+    if __debug__:
+        assert B.ndim == 2, "B should be a 2D tensor (N, M)"
+        assert X.ndim == 2, "X should be a 2D tensor (N, d)"
+        assert B.shape[0] == X.shape[0], "Number of rows in B and X should match"
+        assert reg >= 0, "Regularization parameter must be non-negative"
+    
     Bt = B.transpose(0,1)               # (M, N)
     G = Bt @ B                          # (M, M)
     M = G.shape[0]
     Greg = G + torch.eye(M, dtype=B.dtype, device=B.device) * reg
     rhs = Bt @ X                        # (M, d)
     C = torch.linalg.solve(Greg, rhs)   # (M, d)
+    
+    if __debug__:
+        assert C.ndim == 2, "Output control points should be a 2D tensor"
+        assert C.shape[0] == B.shape[1], "Number of control points should match number of basis functions (columns of B)"
+        assert C.shape[1] == X.shape[1], "Dimensionality of control points should match dimensionality of target points"
+    
     return C
 
 
 def bspline_eval_torch(t_grid, knots, degree, controls):
+    """
+    Evaluate the B-spline curve at a parameter grid using the control points and the basis functions (matrix form).
+    
+    """
     basis_matrix = bspline_basis_matrix(t_grid, knots, degree)
     return basis_matrix @ controls
 
@@ -601,15 +777,28 @@ def bspline_basis_eval(j, p, t, knots):
     Notes
     -----
     - The input `j` should be in the range [0, m-p-1] where m is the number of intervals (number of knots - 1).
-        This ensures that the basis function is well-defined for the given degree and knot vector.
+      This ensures that the basis function is well-defined for the given degree and knot vector.
     - The input `knots` should have at least p+2 elements to define the basis function.
-        This ensures that there exists at least one basis function of degree p for the given knot vector.
+      This ensures that there exists at least one basis function of degree p for the given knot vector.
     - The output `value` will be non-negative and will be zero outside the support of the basis function.
-        The support of B_j^p is [knots[j], knots[j+p+1]) except for the last non-degenerate interval which includes the right endpoint.
+      The support of B_j^p is [knots[j], knots[j+p+1]) except for the last non-degenerate interval which includes the right endpoint.
     - This implementation is not optimized for performance due to its recursive nature and lack of memoization
         but is straightforward and closely follows the mathematical definition of B-spline basis functions.
 
     """
+    if __debug__:
+        assert p >= 0, "Degree p must be non-negative"
+        assert isinstance(t, (int, float)), "Parameter t must be a scalar value"
+        
+        knots = np.asarray(knots)
+        assert knots.ndim == 1, "Knots should be a 1D array-like"
+        assert len(knots) >= p + 2, "Need at least p + 2 knots to define the basis function"
+        assert np.all(knots[:-1] <= knots[1:]), "Knots must be non-decreasing"
+        
+        m = len(knots) - 1
+        assert isinstance(j, int) and j >= 0, "Index j must be a non-negative integer"
+        assert j <= m - p - 1, f"Index j={j} is out of valid range [0, {m - p - 1}] for degree p={p} and number of knots {len(knots)}"
+
     if p == 0:
         # 0-degree basis functions are indicator functions for the intervals defined by the knots
         # support = [left, right) except the last non-degenerate interval which includes the right endpoint
@@ -668,11 +857,32 @@ def bspline_eval_naive(t, knots, degree, controls):
       Thus is more suited for plotting.
     
     """
+    if __debug__:
+        assert degree >= 0, "Degree must be non-negative"
+        assert isinstance(t, (int, float)), "Parameter t must be a scalar value"
+        
+        knots = np.asarray(knots)
+        assert knots.ndim == 1, "Knots should be a 1D array-like"
+        assert len(knots) >= degree + 2, "Need at least degree + 2 knots to define the basis functions"
+        assert np.all(knots[:-1] <= knots[1:]), "Knots must be non-decreasing"
+        
+        controls = np.asarray(controls)
+        assert controls.ndim == 2, "Controls should be a 2D array-like (M, dim)"
+        M = controls.shape[0]
+        expected_M = len(knots) - degree - 1
+        assert M == expected_M, f"Number of control points M={M} does not match expected number of basis functions {expected_M} for degree {degree} and number of knots {len(knots)}"
+    
     S = 0
     for j in range(len(controls)):
         B_j_p = bspline_basis_eval(j, degree, t, knots)
         S += B_j_p * controls[j]
-    return S
+    result = S.astype(controls.dtype)   # ensure the output has the same dtype as controls
+    
+    if __debug__:
+        assert isinstance(result, np.ndarray), "Output point should be a numpy array"
+        assert result.shape == controls.shape[1:], f"Output point should have shape {controls.shape[1:]} matching the dimension of control points"
+
+    return result
 
 
 def find_knot_span_naive(t, knots):
@@ -704,6 +914,14 @@ def find_knot_span_naive(t, knots):
     - If `t` is exactly the last knot value, the function will return the last non-degenerate span index.
 
     """
+    if __debug__:
+        assert isinstance(t, (int, float)), "Parameter t must be a scalar value"
+        
+        knots = np.asarray(knots)
+        assert knots.ndim == 1, "Knots should be a 1D array-like"
+        assert len(knots) >= 2, "Need at least 2 knots to define at least one knot span"
+        assert np.all(knots[:-1] <= knots[1:]), "Knots must be non-decreasing"
+    
     # handle the case when t is exactly the last knot value (should return the last non-degenerate span index)
     if t == knots[-1]:
         for r in range(len(knots) - 2, -1, -1):
@@ -746,6 +964,14 @@ def find_knot_span(t, knots):
     - If `t` is exactly the last knot value, the function will return the last non-degenerate span index.
 
     """
+    if __debug__:
+        assert isinstance(t, (int, float)), "Parameter t must be a scalar value"
+        
+        knots = np.asarray(knots)
+        assert knots.ndim == 1, "Knots should be a 1D array-like"
+        assert len(knots) >= 2, "Need at least 2 knots to define at least one knot span"
+        assert np.all(knots[:-1] <= knots[1:]), "Knots must be non-decreasing"
+    
     # exclude duplicate knots at start and end due to clamping, since they do not affect the search.
     hi = len(knots) - 1
     while hi - 1 >= 0 and knots[hi] == knots[hi - 1]:
@@ -802,6 +1028,21 @@ def de_boor(t, knots, degree, controls):
     - The algorithm works even in case the knots are not clamped and can handle duplicate knots.
     
     """
+    if __debug__:
+        assert degree >= 0, "Degree must be non-negative"
+        assert isinstance(t, (int, float)), "Parameter t must be a scalar value"
+        
+        knots = np.asarray(knots)
+        assert knots.ndim == 1, "Knots should be a 1D array-like"
+        assert len(knots) >= degree + 2, "Need at least degree + 2 knots to define the basis functions"
+        assert np.all(knots[:-1] <= knots[1:]), "Knots must be non-decreasing"
+        
+        controls = np.asarray(controls)
+        assert controls.ndim == 2, "Controls should be a 2D array-like (M, dim)"
+        M = controls.shape[0]
+        expected_M = len(knots) - degree - 1
+        assert M == expected_M, f"Number of control points M={M} does not match expected number of basis functions {expected_M} for degree {degree} and number of knots {len(knots)}"
+
     # find knot span index r such that knots[r] <= t < knots[r+1]
     r = find_knot_span(t, knots)
 
@@ -815,7 +1056,13 @@ def de_boor(t, knots, degree, controls):
             alpha_den = knots[r + i + 1 - k] - knots[r - degree + i]
             alpha = alpha_num / alpha_den if alpha_den != 0 else 0
             d[i] = (1.0 - alpha) * d[i - 1] + alpha * d[i]
-    return d[degree]
+    result = d[degree].astype(controls.dtype)   # ensure the output has the same dtype as controls
+    
+    if __debug__:
+        assert isinstance(result, np.ndarray), "Output point should be a numpy array"
+        assert result.shape == controls.shape[1:], f"Output point should have shape {controls.shape[1:]} matching the dimension of control points"
+
+    return result
 
 bspline_eval = de_boor
 
