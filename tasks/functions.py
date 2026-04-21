@@ -1145,5 +1145,95 @@ def plot_curve_fit_2D(points, knots, degree, controls, error,
     plt.savefig(os.path.join(path, name))   # save plot to external file
     plt.close()
 
+def plot_curve_fit_saliency(points, knots, degree, controls, error,
+                            point_saliency, knot_jacobian,
+                            path=None, name="curve_fit_saliency.png"):
+    """
+    Plot the B-spline curve fit with gradient saliency input attribution.
+
+    Two panels:
+    - Upper: curve fit with data points colored by their overall saliency (contribution
+      to all interior knots combined). High-saliency points appear in warm/bright colors.
+    - Lower: heatmap of per-interior-knot per-point gradient magnitudes |∂t_j / ∂x_i|,
+      showing which specific points most strongly influence each individual knot.
+
+    Parameters
+    ----------
+    points : np.ndarray (N, 2)
+        Input data points.
+    knots : np.ndarray (K,)
+        Full clamped knot vector.
+    degree : int
+        B-spline degree.
+    controls : np.ndarray (M, 2)
+        Control points of the fitted B-spline.
+    error : float
+        Final fitting error (scalar).
+    point_saliency : np.ndarray (N,)
+        Per-point aggregate saliency (mean |∂t_j/∂x_i| norm over all interior knots).
+    knot_jacobian : np.ndarray (num_free, N)
+        Per-interior-knot per-point gradient magnitude (L2 norm over coordinate dims).
+    path : str, optional
+        Output directory.
+    name : str, optional
+        Output filename.
+    """
+    t_dense = np.linspace(0., 1., 1000)
+    curve_points = np.array([bspline_eval(t, knots, degree, controls) for t in t_dense])
+    knot_points  = np.array([bspline_eval(u, knots, degree, controls) for u in knots])
+
+    # normalize point saliency to [0, 1] for the colormap
+    sal_min, sal_max = point_saliency.min(), point_saliency.max()
+    sal_norm = (point_saliency - sal_min) / (sal_max - sal_min) if sal_max > sal_min else np.zeros_like(point_saliency)
+
+    num_free = knot_jacobian.shape[0]
+
+    fig, axes = plt.subplots(2, 1, figsize=(10, 13),
+                             gridspec_kw={'height_ratios': [3, 1]})
+
+    # --- Upper panel: curve fit with saliency-colored data points ---
+    ax = axes[0]
+    ax.plot(curve_points[:, 0], curve_points[:, 1],
+            linestyle='-', color='steelblue', linewidth=1.5, label='B-spline Curve', zorder=1)
+    ax.plot(knot_points[:, 0], knot_points[:, 1],
+            marker='^', linestyle='none', color='limegreen', markersize=10,
+            markeredgecolor='darkgreen', label='Knot Points', zorder=3)
+
+    # scatter colored by normalized saliency; 'hot_r' goes white->yellow->orange->red
+    sc = ax.scatter(points[:, 0], points[:, 1],
+                    c=sal_norm, cmap='hot_r', s=40, vmin=0, vmax=1,
+                    edgecolors='gray', linewidths=0.4, zorder=2, label='Data Points')
+    cbar = fig.colorbar(sc, ax=ax, fraction=0.03, pad=0.02)
+    cbar.set_label("Saliency (normalized)", fontsize=10)
+    cbar.set_ticks([0, 0.5, 1])
+    cbar.set_ticklabels(['low', 'mid', 'high'])
+
+    ax.text(0.02, 0.97, f"Error: {error:.2e}",
+            transform=ax.transAxes, fontsize=10, color='crimson',
+            va='top', ha='left',
+            bbox=dict(boxstyle='round,pad=0.4', facecolor='white', edgecolor='crimson', alpha=0.8))
+    ax.set_title("B-Spline Curve Fit  —  Input Attribution (Gradient Saliency)", fontsize=12)
+    ax.legend(loc='upper right', fontsize=9)
+    ax.grid(True)
+    ax.set_aspect('equal')
+
+    # --- Lower panel: heatmap of per-knot per-point Jacobian magnitudes ---
+    ax2 = axes[1]
+    im = ax2.imshow(knot_jacobian, aspect='auto', cmap='viridis', interpolation='nearest')
+    cbar2 = fig.colorbar(im, ax=ax2, fraction=0.03, pad=0.02)
+    cbar2.set_label(r"|$\partial t_j / \partial \mathbf{x}_i$|", fontsize=10)
+
+    ax2.set_xlabel("Input Point Index $i$", fontsize=10)
+    ax2.set_ylabel("Interior Knot $j$", fontsize=10)
+    ax2.set_yticks(range(num_free))
+    ax2.set_yticklabels([f"$t_{{{j+1}}}$" for j in range(num_free)], fontsize=9)
+    ax2.set_xticks(range(points.shape[0]))
+    ax2.set_title("Per-Knot Attribution Heatmap  —  |∂tⱼ / ∂xᵢ|", fontsize=11)
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(path, name))
+    plt.close()
+
+
 plot_curve = plot_curve_2D
 plot_curve_fit = plot_curve_fit_2D
