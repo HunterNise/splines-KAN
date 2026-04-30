@@ -75,7 +75,7 @@ model = NN(num_knots, num_neurons, degree).to(device)
 
 # Training loop to optimize the neural network parameters to minimize the B-spline fitting loss.
 
-def train(model, points, param="uniform",
+def train(model, points, method="uniform",
           max_iter=1000, tol=1e-6, lr=1e-3):
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)     # method to update model parameters based on computed gradients
     losses = []     # vector to store loss value after each iteration
@@ -83,7 +83,7 @@ def train(model, points, param="uniform",
     # convert from numpy.ndarray to torch.Tensor, cast to float (with desired precision) and move to device
     points = torch.from_numpy(points).to(precision).to(device)
     # compute parametrization points corresponding to data points
-    t_grid = make_grid(points, method=param)
+    t_grid = make_grid(points, method=method)
     degree = model.degree
     
     # loop until reaching maximum number of iterations or the error is below the specified tolerance
@@ -141,9 +141,9 @@ def train(model, points, param="uniform",
 # directory containing the input data files for training
 dir = "/app/data/DNN-Solver/bspline-data/pts/"
 
-for param in ["uniform", "chord_length", "centripetal"]:
+for method in ["uniform", "chord_length", "centripetal"]:
     # create output folder if it doesn't exist
-    output_dir = os.path.join(os.path.dirname(__file__), "outputs" + f"-{param}")
+    output_dir = os.path.join(os.path.dirname(__file__), "outputs" + f"-{method}")
     os.makedirs(output_dir, exist_ok=True)
 
     # print architecture and number of parameters to file
@@ -170,8 +170,8 @@ for param in ["uniform", "chord_length", "centripetal"]:
 
         # launch training
         #print(f"\nTraining on {name}:\n")
-        losses, final_knots, controls = train(model, points, param=param, 
-                                                max_iter=2000, tol=eps, lr=1e-3)
+        losses, final_knots, controls = train(model, points, method=method, 
+                                              max_iter=2000, tol=eps, lr=1e-3)
         final_err = losses[-1]
 
         # print final results to file

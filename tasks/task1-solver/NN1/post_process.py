@@ -16,8 +16,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-for param in ["uniform", "chord_length", "centripetal"]:
-    output_dir = os.path.join(os.path.dirname(__file__), "outputs" + f"-{param}")
+for method in ["uniform", "chord_length", "centripetal"]:
+    output_dir = os.path.join(os.path.dirname(__file__), "outputs" + f"-{method}")
 
     errors = []
     names = []
@@ -32,7 +32,7 @@ for param in ["uniform", "chord_length", "centripetal"]:
         print(f"No results files found in {output_dir}, skipping.")
         continue
 
-    # Sort by name for easy cross-param comparison
+    # Sort by name for easy cross-method comparison
     names_errors = sorted(zip(names, errors), key=lambda x: x[0])
     names_sorted, errors_sorted = zip(*names_errors)
 
@@ -42,7 +42,7 @@ for param in ["uniform", "chord_length", "centripetal"]:
     ax.set_xticklabels(names_sorted, rotation=90, fontsize=6)
     ax.set_xlabel("Sample")
     ax.set_ylabel("Final Error")
-    ax.set_title(f"Final Errors per Sample — {param}")
+    ax.set_title(f"Final Errors per Sample — {method}")
     fig.tight_layout()
     out_path = os.path.join(output_dir, "errors_per_file.png")
     fig.savefig(out_path, dpi=150)

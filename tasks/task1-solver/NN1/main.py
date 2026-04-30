@@ -87,7 +87,7 @@ print()
 
 # Training loop to optimize the neural network parameters to minimize the B-spline fitting loss.
 
-def train(model, points, param="uniform",
+def train(model, points, method="uniform",
           max_iter=1000, tol=1e-6, lr=1e-3):
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)     # method to update model parameters based on computed gradients
     losses = []     # vector to store loss value after each iteration
@@ -95,7 +95,7 @@ def train(model, points, param="uniform",
     # convert from numpy.ndarray to torch.Tensor, cast to float (with desired precision) and move to device
     points = torch.from_numpy(points).to(precision).to(device)
     # compute parametrization points corresponding to data points
-    t_grid = make_grid(points, method=param)
+    t_grid = make_grid(points, method=method)
     degree = model.degree
     
     # loop until reaching maximum number of iterations or the error is below the specified tolerance
@@ -148,7 +148,7 @@ def train(model, points, param="uniform",
     )
 
 # launch training and print final knots and error
-losses, final_knots, controls = train(model, points, param="uniform", 
+losses, final_knots, controls = train(model, points, method="uniform", 
                                       max_iter=2000, tol=eps, lr=1e-3)
 print(f"\nFinal knots:\n{final_knots}")
 final_err = losses[-1]

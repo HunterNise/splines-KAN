@@ -48,7 +48,7 @@ eps = torch.finfo(precision).eps    # machine epsilon for the chosen precision, 
 
 num_knots = 6       # number of knots (without repetitions/clamping)
 degree = 3          # degree of the B-spline curve
-param = "uniform"   # method to compute parameter values corresponding to data points
+method = "uniform"  # method to compute parameter values corresponding to data points
 
 
 path = "/app/data/DNN-Solver/bspline-data"
@@ -134,11 +134,11 @@ with open(summary_path, "w") as f:
     f.write(f"\nB-spline degree:  {degree}")
     
     f.write("\n\nLayer shapes (weight, bias):\n")
-    for name, parameter in model.named_parameters():
-        f.write(f"  {name}: {list(parameter.shape)}\n")
+    for name, param in model.named_parameters():
+        f.write(f"  {name}: {list(param.shape)}\n")
     
-    total     = sum(p.numel() for p in model.parameters())
-    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total     = sum(param.numel() for param in model.parameters())
+    trainable = sum(param.numel() for param in model.parameters() if param.requires_grad)
     f.write(f"\nTotal parameters:     {total:>,.0f}")
     f.write(f"\nTrainable parameters: {trainable:>,.0f}")
     f.write(f"\nFrozen parameters:    {total - trainable:>,.0f}")
@@ -147,7 +147,7 @@ with open(summary_path, "w") as f:
 
 # Training loop to optimize the neural network parameters to minimize the B-spline fitting loss.
 
-def train(model, train_loader, param="uniform",
+def train(model, train_loader, method="uniform",
           num_epochs=100, tol=1e-6, lr=1e-3, beta=1.0):
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)     # method to update model parameters based on computed gradients
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)  # learning rate scheduler to adjust the learning rate during training; here we use cosine annealing which gradually decreases the learning rate following a cosine curve, with T_max specifying the number of epochs for one cycle 
@@ -169,7 +169,7 @@ def train(model, train_loader, param="uniform",
             # loop through each sample in the batch
             for j in range(pts_batch.shape[0]):
                 points = pts_batch[j].reshape(num_points, dim)
-                t_grid = make_grid(points, method=param)
+                t_grid = make_grid(points, method=method)
 
                 # pad the internal knots to open/clamped knots
                 # to avoid numerical errors from the cumsum + softmax, we throw away the first and last predicted knots and replace them with exact 0 and 1
@@ -233,7 +233,7 @@ if os.path.exists(model_file) and os.path.exists(losses_file) and not RETRAIN:
 # ... otherwise, train a new model and save it to file
 else:
     # launch training
-    train_losses = train(model, train_loader, param=param, 
+    train_losses = train(model, train_loader, method=method, 
                          num_epochs=500, tol=eps, lr=1e-3, beta=0.0)
     # save trained model to file
     torch.save(model.state_dict(), model_file)
@@ -257,7 +257,7 @@ for split, loader in [("train", train_loader), ("test", test_loader)]:
         label    = label.to(device).squeeze(0)          # (num_interior,)
 
         points = pts_flat.reshape(num_points, dim)
-        t_grid = make_grid(points, method=param)
+        t_grid = make_grid(points, method=method)
 
         with torch.no_grad():
             pred_knots = model(pts_flat.unsqueeze(0)).squeeze(0)   # (num_knots,)
