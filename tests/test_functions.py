@@ -1,7 +1,7 @@
 import sys
 import os
-# add the parent directory of this test file to the Python path so we can import functions from tasks
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'tasks'))
+# add the parent directory of this test file to the Python path so we can import functions from source
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'source'))
 
 import pytest
 import numpy as np

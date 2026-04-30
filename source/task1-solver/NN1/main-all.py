@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 import numpy as np
 
-from tasks.functions import *
+from source.functions import *
 
 from tqdm import tqdm
 

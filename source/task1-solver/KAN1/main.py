@@ -5,7 +5,7 @@ from kan import KAN
 
 import numpy as np
 
-from tasks.functions import *
+from source.functions import *
 
 
 # Set seed for reproducibility

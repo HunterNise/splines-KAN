@@ -5,7 +5,7 @@ from torch.utils.data import Dataset, DataLoader, random_split
 
 import numpy as np
 
-from tasks.functions import *
+from source.functions import *
 
 
 import os
