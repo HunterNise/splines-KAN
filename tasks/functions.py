@@ -1093,6 +1093,60 @@ def plot_loss(losses, log=True,
     plt.savefig(os.path.join(path, name))   # save plot to external file
     plt.close()
 
+def plot_train_losses(train_losses, log=True,
+                      path=None, name="train_losses.png"):
+    """
+    Plot epoch training losses with mean (main), min/max band, and std error bars.
+
+    Parameters
+    ----------
+    train_losses : array-like of shape (num_epochs, 4)
+        Each row is (mean, max, min, std) for that epoch.
+    log : bool
+        Whether to use a log scale on the y-axis.
+    path : str
+        Directory to save the figure.
+    name : str
+        Filename for the saved figure.
+    
+    """
+    train_losses = np.asarray(train_losses)   # (num_epochs, 4)
+    epochs = np.arange(len(train_losses))
+    mean = train_losses[:, 0]
+    vmax = train_losses[:, 1]
+    vmin = train_losses[:, 2]
+    std  = train_losses[:, 3]
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+
+    # min/max band
+    ax.fill_between(epochs, vmin, vmax,
+                    alpha=0.15, color="steelblue", label="Min-Max range")
+    # min and max lines (dimmer, thinner)
+    ax.plot(epochs, vmax, linewidth=0.8, alpha=0.4, color="steelblue")
+    ax.plot(epochs, vmin, linewidth=0.8, alpha=0.4, color="steelblue")
+    # std error bars
+    ax.errorbar(epochs, mean, yerr=std,
+                fmt="none", ecolor="lightseagreen", elinewidth=1.0, alpha=0.4,
+                capsize=3, label="±1 Std")
+    # mean line (main focus)
+    ax.plot(epochs, mean, linewidth=2.0, color="steelblue", label="Mean loss")
+
+    ax.set_xlabel("Epoch")
+    if log:
+        ax.set_yscale("log")
+        ax.set_ylabel("Loss (log scale)")
+    else:
+        ax.set_ylabel("Loss")
+    ax.set_title("Training Loss per Epoch")
+
+    ax.grid(True, which="both", linestyle="--", linewidth=0.5)
+    ax.legend()
+    fig.tight_layout()
+
+    fig.savefig(os.path.join(path, name))
+    plt.close(fig)
+
 
 def plot_curve_2D(knots, degree, controls, 
                   path=None, name="curve.png"):
