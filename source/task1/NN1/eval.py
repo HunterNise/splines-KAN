@@ -44,54 +44,23 @@ eps = torch.finfo(precision).eps    # machine epsilon for the chosen precision, 
 
 # Load model from file
 
-num_knots = 6       # number of knots (without repetitions/clamping)
-num_points = 100    # number of data points sampled from the B-spline curve
-degree = 3          # degree of the B-spline curve
-method = "uniform"  # method to compute parameter values corresponding to data points
-dim = 2
-
+from .model import NN
 
 model_file = os.path.join(output_dir, "model.pth")
 
 
-class NN(nn.Module):
-    # class contructor to initialize the neural network architecture and parameters
-    def __init__(self, num_knots=5, num_neurons=128, degree=3):
-        super().__init__()              # call parent constructor
-        
-        self.num_knots = num_knots      # store number of knots as object variable for later use
-        self.degree = degree            # store degree of B-spline as object variable for later use
-        
-        # the knot vector must be non-decreasing, so we predict intervals between knots and then convert back to knots
-        num_intervals = num_knots - 1
-        
-        self.stack = nn.Sequential(
-            nn.Linear(num_points * dim, num_neurons),   # input layer: takes flattened data points as input
-            nn.ReLU(),
-            nn.Linear(num_neurons, num_neurons),
-            nn.ReLU(),
-            nn.Linear(num_neurons, num_neurons),
-            nn.ReLU(),
-            nn.Linear(num_neurons, num_intervals),
-            nn.Softmax(dim=1)       # ensure intervals are positive and sum to 1; dim=1 applies softmax across the correct dimension for batch processing
-        )
-
-    def forward(self, x):
-        x = self.stack(x)          # pass through the stack of layers
-        # intervals_to_knots only handles 1D; prepend zero column and cumsum manually
-        zero = torch.zeros(x.shape[0], 1, dtype=x.dtype, device=x.device)
-        x = torch.cumsum(torch.cat((zero, x), dim=1), dim=1)  # (batch, num_knots)
-        return x
-
-
-num_neurons = 512                   # number of neurons in each hidden layer
-# create model instance and move to device
-model = NN(num_knots, num_neurons, degree).to(device)
-
-
 if os.path.exists(model_file):
     print(f"Loading model from {model_file}")
-    model.load_state_dict(torch.load(model_file, map_location=device))
+    ckpt  = torch.load(model_file, map_location=device)
+    model = NN(ckpt['num_points'], ckpt['dim'], ckpt['num_knots'],
+               ckpt['num_neurons'], ckpt['degree'],
+               ckpt.get('dropout', 0.0)).to(device)
+    model.load_state_dict(ckpt['model_state_dict'])
+    model.eval()
+    num_points = ckpt['num_points']
+    dim        = ckpt['dim']
+    num_knots  = ckpt['num_knots']
+    degree     = ckpt['degree']
 else:
     print(f"Model file {model_file} not found. Please run train.py first to train the model and save it to the correct location.")
     exit(1)
@@ -225,14 +194,14 @@ class BSplineDataset(Dataset):
         
         # resample curves at num_points uniform parameter values in [0, 1]
         
-        t_uniform = torch.linspace(0.0, 1.0, num_points, dtype=torch.float64)
+        t_grid = torch.linspace(0.0, 1.0, num_points, dtype=torch.float64)
 
         for i in range(len(ctrl_pts)):
             full_knots  = torch.tensor(knots[i, :full_knot_len], dtype=torch.float64)
             ctrls       = torch.tensor(ctrl_pts[i, :n_ctrl],     dtype=torch.float64)   # (n_ctrl, dim)
 
             # evaluate B-spline at num_points uniform parameter values
-            B   = bspline_basis_matrix(t_uniform, full_knots, d, soft=False)    # (num_points, n_ctrl)
+            B   = bspline_basis_matrix(t_grid, full_knots, d, soft=False)    # (num_points, n_ctrl)
             pts = B @ ctrls                                                     # (num_points, dim)
 
             # interior knots as labels (exclude the d+1 leading zeros and d+1 trailing ones)

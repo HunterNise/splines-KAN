@@ -44,23 +44,19 @@ eps = torch.finfo(precision).eps    # machine epsilon for the chosen precision, 
 
 # Load points from text file
 
+path = "/app/data/SplinegenDataset/2d_train.npz"
+
 num_knots = 6       # number of knots (without repetitions/clamping)
 num_points = 100    # number of data points sampled from the B-spline curve
-method = "uniform"  # method to compute parameter values corresponding to data points
 
-
-path = "/app/data/SplinegenDataset/2d_train.npz"
 
 class BSplineDataset(Dataset):
     def __init__(self, path, num_knots, num_points=100):
         self.samples = []
-        self.num_knots = num_knots
-        self.num_points = num_points
-        self.method = method
 
         with np.load(path) as data:
-            ctrl_pts    = data['ctrl_pts']
             knots       = data['knots']
+            ctrl_pts    = data['ctrl_pts']
             degree      = data['degree']
 
         self.degree = int(degree)
@@ -70,13 +66,13 @@ class BSplineDataset(Dataset):
         # filter curves whose knot count matches num_knots
         
         d = self.degree
-        # formula derived from the padded representation: count_nonzero counts
-        # the (num_knots-2) interior knots plus (d+1) trailing ones
+        # formula derived from the padded representation:
+        #   count_nonzero counts the (num_knots-2) interior knots plus (d+1) trailing ones
         knot_count = np.count_nonzero(knots, axis=1) + (d + 1) - 2 * d
         mask = knot_count == num_knots      # bool (N_ds,)
 
-        ctrl_pts = ctrl_pts[mask]           # (N, max_ctrl, dim)
         knots    = knots[mask]              # (N, max_knots_padded)
+        ctrl_pts = ctrl_pts[mask]           # (N, max_ctrl, dim)
 
         # actual (unpadded) sizes for this num_knots
         full_knot_len   = num_knots + 2 * d         # full clamped knot vector length
@@ -85,20 +81,22 @@ class BSplineDataset(Dataset):
         
         # resample curves at num_points uniform parameter values in [0, 1]
         
-        t_uniform = torch.linspace(0.0, 1.0, num_points, dtype=torch.float64)
+        t_grid = torch.linspace(0.0, 1.0, num_points, dtype=torch.float64)
 
+        # loop over samples
         for i in range(len(ctrl_pts)):
+            # discard trailing zeros from the padded representation and convert to torch tensors
             full_knots  = torch.tensor(knots[i, :full_knot_len], dtype=torch.float64)
             ctrls       = torch.tensor(ctrl_pts[i, :n_ctrl],     dtype=torch.float64)   # (n_ctrl, dim)
 
-            # evaluate B-spline at num_points uniform parameter values
-            B   = bspline_basis_matrix(t_uniform, full_knots, d, soft=False)    # (num_points, n_ctrl)
+            # evaluate B-spline at num_points parameter values
+            B   = bspline_basis_matrix(t_grid, full_knots, d, soft=False)       # (num_points, n_ctrl)
             pts = B @ ctrls                                                     # (num_points, dim)
 
             # interior knots as labels (exclude the d+1 leading zeros and d+1 trailing ones)
-            interior_knots = full_knots[d + 1 : -(d + 1)]   # (num_knots - 2,)
+            interior_knots = full_knots[d + 1 : -(d + 1)]       # (num_knots - 2,)
 
-            self.samples.append((pts.reshape(-1), interior_knots))
+            self.samples.append((pts.reshape(-1), interior_knots, t_grid))
 
     def __len__(self):
         return len(self.samples)
@@ -107,6 +105,7 @@ class BSplineDataset(Dataset):
         return self.samples[idx]
 
 
+print(f"Loading dataset ...")
 dataset = BSplineDataset(path, num_knots, num_points)
 degree  = dataset.degree        # degree of the B-spline curve
 dim     = dataset.dim           # dimension of the data points (2 for 2D, 3 for 3D)
@@ -125,49 +124,24 @@ test_loader  = DataLoader(test_set,  batch_size=batch_size, shuffle=False)
 # Define the neural network model to approximate the mapping
 #   from input data points to a final knot vector that minimizes the B-spline error.
 
-class NN(nn.Module):
-    # class contructor to initialize the neural network architecture and parameters
-    def __init__(self, num_knots=5, num_neurons=128, degree=3):
-        super().__init__()              # call parent constructor
-        
-        self.num_knots = num_knots      # store number of knots as object variable for later use
-        self.degree = degree            # store degree of B-spline as object variable for later use
-        
-        # the knot vector must be non-decreasing, so we predict intervals between knots and then convert back to knots
-        num_intervals = num_knots - 1
-        
-        self.stack = nn.Sequential(
-            nn.Linear(num_points * dim, num_neurons),   # input layer: takes flattened data points as input
-            nn.ReLU(),
-            nn.Linear(num_neurons, num_neurons),
-            nn.ReLU(),
-            nn.Linear(num_neurons, num_neurons),
-            nn.ReLU(),
-            nn.Linear(num_neurons, num_intervals),
-            nn.Softmax(dim=1)       # ensure intervals are positive and sum to 1; dim=1 applies softmax across the correct dimension for batch processing
-        )
-
-    def forward(self, x):
-        x = self.stack(x)          # pass through the stack of layers
-        # intervals_to_knots only handles 1D; prepend zero column and cumsum manually
-        zero = torch.zeros(x.shape[0], 1, dtype=x.dtype, device=x.device)
-        x = torch.cumsum(torch.cat((zero, x), dim=1), dim=1)  # (batch, num_knots)
-        return x
+from .model import NN
 
 
-num_neurons = 512                   # number of neurons in each hidden layer
+num_neurons = 256                   # number of neurons in each hidden layer
+dropout     = 0.1                   # dropout probability applied after each hidden ReLU
 # create model instance and move to device
-model = NN(num_knots, num_neurons, degree).to(device)
+model = NN(num_points, dim, num_knots, num_neurons, degree, dropout).to(device)
 
 # print architecture and number of parameters to file
 summary_path = os.path.join(output_dir, "summary.txt")
+print(f"Saving model summary ...")
 with open(summary_path, "w") as f:
     f.write("\nModel architecture:\n")
     f.write(str(model) + "\n\n")
     
-    f.write(f"\nInput dimension:  {num_knots - 1}  (intervals between {num_knots} knots)")
-    f.write(f"\nOutput dimension: {num_knots - 1}  (predicted intervals, softmax-normalized)")
-    f.write(f"\nB-spline degree:  {degree}")
+    f.write(f"\nInput dimension:  {model.num_points * model.dim} = {model.num_points} * {model.dim}  (flattened data points)")
+    f.write(f"\nOutput dimension: {model.num_knots} (knots without clamping)")
+    f.write(f"\nB-spline degree:  {model.degree}")
     
     f.write("\n\nLayer shapes (weight, bias):\n")
     for name, param in model.named_parameters():
@@ -183,20 +157,24 @@ with open(summary_path, "w") as f:
 
 # Training loop to optimize the neural network parameters to minimize the B-spline fitting loss.
 
-def compute_epoch_loss(model, loader, method, degree, device, precision, beta):
+def compute_epoch_loss(model, loader, beta):
     """Evaluate mean/max/min/std loss over a data loader without gradient updates."""
     batch_losses = []
+    degree = model.degree
     model.eval()
     with torch.no_grad():
-        for pts_batch, labels_batch in loader:
-            pts_batch    = pts_batch.to(device)
+        for points_batch, labels_batch, params_batch in loader:
+            points_batch = points_batch.to(device)
             labels_batch = labels_batch.to(device)
-            pred_knots   = model(pts_batch)   # (batch, num_knots)
+            params_batch = params_batch.to(device)
+            
+            pred_knots = model(points_batch)   # (batch, num_knots)
 
             batch_loss = torch.tensor(0.0, dtype=precision, device=device)
-            for j in range(pts_batch.shape[0]):
-                points = pts_batch[j].reshape(num_points, dim)
-                t_grid = make_grid(points, method=method)
+            batch_len = points_batch.shape[0]
+            for j in range(batch_len):
+                points = points_batch[j].reshape(num_points, dim)
+                t_grid = params_batch[j]
 
                 full_knots = torch.cat((
                     torch.zeros(degree + 1, dtype=pred_knots.dtype, device=pred_knots.device),
@@ -211,20 +189,22 @@ def compute_epoch_loss(model, loader, method, degree, device, precision, beta):
                 supervised_loss = F.mse_loss(pred_knots[j, 1:-1], labels_batch[j])
                 batch_loss     += physics_loss + beta * supervised_loss
 
-            batch_losses.append((batch_loss / pts_batch.shape[0]).item())
+            batch_losses.append((batch_loss / batch_len).item())
     model.train()
     return batch_losses
 
 
-def train(model, train_loader, test_loader, method="uniform",
-          num_epochs=100, tol=1e-6, lr=1e-3, beta=1.0, patience=10):
+def train(model, train_loader, test_loader,
+          num_epochs=100, tol=1e-6, lr=1e-3, beta=0.0, patience=10):
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.5, patience=5)
     train_losses = []
     test_losses  = []
 
-    degree = model.degree
+    num_points = model.num_points
+    dim        = model.dim
+    degree     = model.degree
 
     best_test_mean  = float("inf")
     best_state      = None
@@ -235,18 +215,20 @@ def train(model, train_loader, test_loader, method="uniform",
         batch_losses = []
         model.train()
         # loop through batches of data points from the training set
-        for pts_batch, labels_batch in tqdm(train_loader, ncols=100, desc=f"Epoch {epoch}"):
-            pts_batch    = pts_batch.to(device)         # (batch, num_points*dim)
+        for points_batch, labels_batch, params_batch in tqdm(train_loader, ncols=100, desc=f"Epoch {epoch}"):
+            points_batch = points_batch.to(device)         # (batch, num_points*dim)
             labels_batch = labels_batch.to(device)
+            params_batch = params_batch.to(device)
 
             # predict final knots from the model given the input data points
-            pred_knots = model(pts_batch)               # (batch, num_knots)
+            pred_knots = model(points_batch)               # (batch, num_knots)
 
             batch_loss = torch.tensor(0.0, dtype=precision, device=device)
             # loop through each sample in the batch
-            for j in range(pts_batch.shape[0]):
-                points = pts_batch[j].reshape(num_points, dim)
-                t_grid = make_grid(points, method=method)
+            batch_len = points_batch.shape[0]
+            for j in range(batch_len):
+                points = points_batch[j].reshape(num_points, dim)
+                t_grid = params_batch[j]
 
                 # pad the internal knots to open/clamped knots
                 # to avoid numerical errors from the cumsum + softmax, we throw away the first and last predicted knots and replace them with exact 0 and 1
@@ -268,7 +250,7 @@ def train(model, train_loader, test_loader, method="uniform",
                 # total loss for the sample is a combination of physics loss and supervised loss, weighted by a hyperparameter beta to balance the two components
                 batch_loss += physics_loss + beta * supervised_loss
 
-            batch_loss = batch_loss / pts_batch.shape[0]   # mean over batch
+            batch_loss = batch_loss / batch_len   # mean over batch
             batch_losses.append(batch_loss.item())
 
             batch_loss.backward()       # compute gradients of the batch loss with respect to model parameters using backpropagation
@@ -282,8 +264,7 @@ def train(model, train_loader, test_loader, method="uniform",
         ))
 
         # evaluate on test set
-        test_batch_losses = compute_epoch_loss(
-            model, test_loader, method, degree, device, precision, beta)
+        test_batch_losses = compute_epoch_loss(model, test_loader, beta)
         test_mean = np.mean(test_batch_losses)
         test_losses.append((
             test_mean, np.max(test_batch_losses),
@@ -318,14 +299,54 @@ def train(model, train_loader, test_loader, method="uniform",
 model_file        = os.path.join(output_dir, "model.pth")
 train_losses_file = os.path.join(output_dir, "train_losses.npy")
 test_losses_file  = os.path.join(output_dir, "test_losses.npy")
+training_file     = os.path.join(output_dir, "training_info.txt")
 
 # train the model and save it to file
+
+num_epochs  = 300       # maximum number of epochs to train for
+lr          = 1e-3      # learning rate
+beta        = 0.5       # supervised loss weight; set to 0.0 to train with physics loss only
+patience    = 15        # early stopping patience
+
 train_losses, test_losses = train(
-    model, train_loader, test_loader, method=method,
-    num_epochs=500, tol=eps, lr=1e-3, beta=0.0, patience=10)
-torch.save(model.state_dict(), model_file)
+    model, train_loader, test_loader,
+    num_epochs=num_epochs, tol=eps, lr=lr, beta=beta, patience=patience
+)
+
+torch.save({
+    'model_state_dict'  : model.state_dict(),
+    'num_points'        : num_points,
+    'dim'               : dim,
+    'num_knots'         : num_knots,
+    'num_neurons'       : num_neurons,
+    'degree'            : degree,
+    'dropout'           : dropout,
+}, model_file)
+
 np.save(train_losses_file, np.array(train_losses, dtype=np.float64))
 np.save(test_losses_file,  np.array(test_losses,  dtype=np.float64))
+
+with open(training_file, "w") as f:
+    f.write("\nDataset information:\n")
+    f.write(f"  Path: {path}\n")
+    f.write(f"  {num_points} points {dim}D per curve, {num_knots} knots, degree {degree}\n")
+    f.write(f"  Number of samples: {len(dataset)}\n")
+    f.write(f"  Number of training samples: {len(train_set)}\n")
+    f.write(f"  Number of test samples: {len(test_set)}\n")
+
+    f.write("\nTraining configuration:\n")
+    f.write(f"  Dropout: {dropout}\n")
+    f.write(f"  Batch size: {batch_size}\n")
+    f.write(f"  Number of epochs: {num_epochs}\n")
+    f.write(f"  Learning rate: {lr:.e}\n")
+    f.write(f"  Beta (supervised loss weight): {beta}\n")
+    f.write(f"  Patience (early stopping): {patience} epochs\n")
+
+    f.write("\nTraining information and final results:\n")
+    f.write(f"  Training completed in {len(train_losses)} epochs.\n")
+    f.write(f"  Final train loss: {train_losses[-1][0]:>.6f}\n")
+    f.write(f"  Final test loss:  {test_losses[-1][0]:>.6f}\n")
+
 
 # plot training and test loss curves
 plot_train_losses(train_losses, log=True,
