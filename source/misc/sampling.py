@@ -1,3 +1,6 @@
+""" Compare sampling methods for B-spline curves. """
+
+
 import torch
 import numpy as np
 from source.functions import *
@@ -9,6 +12,7 @@ def uniform_samples(num_points):
     """
     return torch.linspace(0.0, 1.0, num_points, dtype=torch.float64)
 
+# Fixed-point iteration method [Does not work]
 # def chord_length_samples(full_knots, ctrls, d, num_points, n_iter=20, tol=1e-10):
 #     """
 #     Find params such that chord_length_params(curve(params)) == params.

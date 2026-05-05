@@ -1,3 +1,19 @@
+"""
+[task1-solver/NN2] Neural network B-spline knot optimizer — input is data points, with saliency.
+
+Changes the network input from the initial knot vector to the actual flattened data points,
+making the model independent of any initial knot guess. Changes vs NN1/main.py:
+- Network input: flattened data points (num_points*dim,) instead of knot intervals.
+- Architecture: stack1 maps points→intervals (Linear(num_points*dim, 128) → ReLU → Softmax),
+  stack2 refines intervals→intervals (Linear(128, 128) → ReLU → Softmax); no knot→interval
+  conversion at the input.
+- Single sample (spl_data10.txt), same degree and num_knots=6 as NN1.
+- Post-training gradient saliency analysis: computes the Jacobian J[j,i]=||∂t_j/∂x_i||₂
+  for each interior knot t_j and input point x_i, then aggregates per-point importance scores
+  to identify which data points most influence knot placement.
+"""
+
+
 import torch
 from torch import nn
 import torch.nn.functional as F

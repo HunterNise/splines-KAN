@@ -1,3 +1,16 @@
+"""
+[task1/NN2] Model architecture definition — factored out from train.py for reproducibility.
+
+Defines the NN class used by task1/NN2/train.py. Kept in a separate file so that a verbatim
+copy is saved to outputs/ at training time, ensuring eval scripts can always reconstruct the
+exact architecture that was trained.
+
+Changes vs task1/NN1 architecture:
+- Dropout layers (configurable probability) inserted after each hidden ReLU.
+- Accepts num_points, dim, and dropout as constructor arguments (were hardcoded in NN1).
+"""
+
+
 import torch
 from torch import nn
 

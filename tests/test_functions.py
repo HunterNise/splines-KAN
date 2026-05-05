@@ -1,13 +1,12 @@
-import sys
-import os
-# add the parent directory of this test file to the Python path so we can import functions from source
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'source'))
+""" Tests for the functions module. """
+
 
 import pytest
+
 import numpy as np
 import torch
 
-from functions import (
+from source.functions import (
     # knot/interval conversions
     knots_to_intervals_naive,
     knots_to_intervals_torch,
@@ -36,6 +35,8 @@ from functions import (
 # ==================================================
 # Shared fixtures
 # ==================================================
+
+# [not used]
 
 @pytest.fixture
 def uniform_knots():

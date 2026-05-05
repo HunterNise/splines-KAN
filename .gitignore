@@ -1,14 +1,21 @@
+# environment files
+.mode
+.venv/
+
+# pytest files
 **/__pycache__/
 **/.pytest_cache/
 
+
+# datasets (too big for github!)
 data/
 
+# output folders for the scripts
 **/outputs*/
+# splines/model plots and model checkpoints from pykan
 **/figures/
 **/model/
 
+# model architecture and training parameters files
 **/model.py
 **/train.prm
-
-.mode
-.venv/

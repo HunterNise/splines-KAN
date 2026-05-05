@@ -1,3 +1,16 @@
+"""
+[task1/NN2] Evaluation script for the model trained by train.py.
+
+Loads the model architecture (model.py) and hyperparameters (train.prm) from outputs/ —
+the copies saved during training — and the best model weights, then evaluates on a
+selection of samples from both training and test sets, saving results and curve-fit plots.
+
+Loading from the output copies (rather than source files) ensures evaluation always uses
+the exact architecture and settings in effect at training time, even if source files are
+later modified.
+"""
+
+
 import torch
 from torch import nn
 import torch.nn.functional as F

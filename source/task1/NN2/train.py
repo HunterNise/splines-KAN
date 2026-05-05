@@ -1,3 +1,18 @@
+"""
+[task1/NN2] Dataset-level B-spline knot predictor — parameter file, dropout, checkpointing.
+
+Productionizes the NN1 training pipeline with better software engineering. Changes vs task1/NN1:
+- All hyperparameters read from train.prm (deal.II parameter file convention: subsection/set).
+- Model architecture factored out to model.py; both model.py and train.prm are copied to
+  outputs/ at the start so each run is fully reproducible from its output folder alone.
+- Dropout regularization added after each hidden ReLU (probability read from parameter file).
+- Checkpoint/resume: training state (epoch, optimizer, scheduler, losses, patience counter,
+  best weights) written to checkpoint.pth every checkpoint_interval epochs; automatically
+  reloaded if training is restarted after interruption; checkpoint deleted on clean completion.
+- Dataset yields a precomputed t_grid as a third element alongside pts and interior_knots.
+"""
+
+
 import torch
 from torch import nn
 import torch.nn.functional as F

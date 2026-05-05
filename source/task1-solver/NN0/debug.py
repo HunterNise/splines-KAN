@@ -1,3 +1,10 @@
+"""
+Debugging and visualization code for the neural network-based B-spline fitting solver.
+
+Use hardcoded flags to enable/disable printing of parameters, gradients, loss values, knot vectors, basis matrices, control points, etc. for detailed step-by-step tracing of the training process.
+"""
+
+
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -13,22 +20,22 @@ torch.manual_seed(0)
 
 INIT = "int"   # "0-int-1", "int", or "all"
 
-PARAMS          = False
-GRADIENTS       = False
-LOSS            = False
-KNOTS           = False
-MATRIX_CTRLS    = False
-LS_CONTROLS     = False
+PARAMS          = False     # model parameters (weights of linear layers) at each iteration
+GRADIENTS       = False     # gradients of the loss with respect to model parameters after backward pass
+LOSS            = False     # loss value after each iteration
+KNOTS           = False     # initial, predicted, and full knot vectors at each iteration
+MATRIX_CTRLS    = False     # basis matrix and control points at each iteration
+LS_CONTROLS     = False     # detailed diagnostics for the least squares control point solver (condition number, singular values, etc.)
 AT_LEAST_ONE = PARAMS or GRADIENTS or LOSS or KNOTS or MATRIX_CTRLS or LS_CONTROLS
 if AT_LEAST_ONE:
     MAX_ITER = 2    # reduce iterations for debugging when printing detailed info
 else:
     MAX_ITER = float('inf')
 
-PLOT            = True
-CURVE           = True
-BASIS_TREE      = False
-BASIS_FNS       = False
+PLOT            = True      # plot the final fitted B-spline curve against the data points after training
+CURVE           = True      # whether to plot the B-spline curve (if False, only plot data points)
+BASIS_TREE      = False     # visualize the recursive structure of the B-spline basis functions as a tree (for debugging the basis function implementation)
+BASIS_FNS       = False     # visualize the individual B-spline basis functions
 
 # --------------------------------------------------
 

@@ -7,6 +7,7 @@ This module contains implementations of various functions used in B-spline curve
      using uniform, chord length, or centripetal methods.
 - B-spline evaluation: functions to evaluate B-spline curves given basis matrices and control points,
      or using the de Boor algorithm for specific parameter values.
+- Utility functions: miscellaneous helper functions for plotting, file handling, etc.
 
 NOTE: torch implementations keep dtype/device and are differentiable by autograd
 """

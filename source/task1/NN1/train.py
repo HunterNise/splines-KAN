@@ -1,3 +1,18 @@
+"""
+[task1/NN1] Dataset-level B-spline knot predictor — SplinegenDataset, deeper MLP, train/test tracking.
+
+Scales up the NN0 experiment with a larger dataset and improved training. Changes vs task1/NN0:
+- Dataset: SplinegenDataset (2d_train.npz), a large synthetic dataset of resampled B-spline curves.
+  Curves are filtered by num_knots; train/test split 80/20; batch_size=64.
+- Deeper network: 3 hidden layers with 512 neurons each (vs 2 layers, 128 neurons).
+- ReduceLROnPlateau scheduler (factor=0.5, halves LR on test-loss plateau) instead of cosine annealing.
+- Early stopping: training halts when test loss fails to improve by tol for patience epochs;
+  best weights are restored at the end.
+- Per-epoch test-set evaluation via compute_epoch_loss() (no gradient updates).
+- Both train and test loss arrays saved; combined train-vs-test loss plot generated.
+"""
+
+
 import torch
 from torch import nn
 import torch.nn.functional as F

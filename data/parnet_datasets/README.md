@@ -9,6 +9,17 @@ http://www.ios.htwg-konstanz.de/parnetdatasets
 
 ---
 
+After extracting, the file structure should be:
+```
+parnet_datasets/
+├── evalset1.txt
+├── evalset2.txt
+├── evalset3.txt
+├── evalset4.txt
+├── test.txt
+└── train.txt
+```
+
 Every two lines correspond to a point cloud:
 $$
  \vdots \\
@@ -16,6 +27,8 @@ $$
  y_1, y_2, ..., y_n \\
  \vdots
 $$
+
+---
 
 From the article:
 

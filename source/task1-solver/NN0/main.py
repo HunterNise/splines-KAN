@@ -1,3 +1,22 @@
+"""
+[task1-solver/NN0] Neural network B-spline knot optimizer — single sample, float32 baseline.
+
+Trains a small MLP as a solver that maps a uniform initial knot vector to an optimized
+knot vector minimizing the squared B-spline fitting error for a fixed set of 2D input points.
+
+This is the first prototype:
+- Single hardcoded sample (spl_data00.txt).
+- Single-precision (float32) arithmetic.
+- All B-spline utilities (basis functions, parameterization, least-squares solve) are
+  implemented inline rather than imported from source.functions.
+- Architecture: intervals → Linear(4→64) → ReLU → Linear(64→4) → Softmax → cumsum → knots.
+  The network operates on knot *intervals* (consecutive differences) so the output is
+  always non-decreasing after a cumulative sum.
+- Physics-only loss: sum of squared residuals ||B(t,τ)·C − P||².
+- degree=3, num_knots=5.
+"""
+
+
 import torch
 from torch import nn
 import torch.nn.functional as F

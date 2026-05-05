@@ -1,3 +1,14 @@
+"""
+[task1/NN1] Evaluation script for the model trained by train.py.
+
+Loads the saved model weights and runs inference on samples from both the training and
+test sets, saving per-sample results (error, knots, controls) and curve-fit plots to
+outputs/eval/.
+
+Kept separate from train.py so evaluation can be re-run without retraining.
+"""
+
+
 import torch
 from torch import nn
 import torch.nn.functional as F

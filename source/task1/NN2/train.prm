@@ -4,6 +4,7 @@
 #     set <Key> = <Value>
 #   end
 
+
 subsection Dataset
   # Path to the training dataset (.npz file)
   set Path             = data/SplinegenDataset/2d_train.npz

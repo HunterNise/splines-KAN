@@ -1,3 +1,6 @@
+""" Explore the Splinegen dataset. """
+
+
 import numpy as np
 
 path = "data/SplinegenDataset/2d_train.npz"

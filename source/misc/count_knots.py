@@ -1,3 +1,6 @@
+""" Count knots in B-spline data files. """
+
+
 import os
 import numpy as np
 from source.functions import ROOT

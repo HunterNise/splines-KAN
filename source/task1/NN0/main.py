@@ -1,3 +1,21 @@
+"""
+[task1/NN0] Dataset-level B-spline knot predictor — DNN-Solver dataset, combined loss.
+
+First experiment that learns a single model generalizing across multiple curves, rather
+than fitting one curve at a time as in task1-solver/. Changes vs task1-solver:
+- Dataset: DNN-Solver bspline-data, where ground-truth knot vectors are available.
+  BSplineDataset loads matching (pts, knot) file pairs; samples are filtered to a fixed
+  num_knots value; train/test split 70/30, batch_size=1.
+- Input: flattened data points; output: predicted interior knots (as intervals + cumsum).
+- Architecture: Linear(num_points*dim→128) → ReLU → Linear(128→128) → ReLU →
+  Linear(128→num_intervals) → Softmax → cumsum → knots.
+- Combined loss: physics_loss + beta * supervised_loss, where supervised_loss is the MSE
+  between predicted and ground-truth interior knots. Setting beta=0 gives physics-only mode.
+- Cosine annealing learning rate scheduler.
+- Evaluation loop saves per-sample results and curve_fit plots to outputs/eval/.
+"""
+
+
 import torch
 from torch import nn
 import torch.nn.functional as F

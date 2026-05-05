@@ -1,3 +1,19 @@
+"""
+[task1-solver/KAN1] KAN-based B-spline knot optimizer — KAN version of NN1.
+
+Replaces the MLP solver with a Kolmogorov-Arnold Network (KAN) while keeping the same
+single-sample, single-knot-count task as NN1. Changes vs NN1/main.py:
+- Model: KAN([num_intervals, num_hidden, num_intervals]) with learnable cubic B-spline
+  activations on each edge (grid=5, k=3) instead of fixed ReLU activations on nodes.
+- KAN output is in interval space; softmax is applied manually after the forward pass.
+- Visualization: plots the KAN graph before training, after training, and after pruning.
+- Model pruning: model.prune() removes low-contribution nodes post-training; the pruned
+  model is re-evaluated and its architecture saved.
+- Requires a warm-up forward pass (reinit, batch≥2) to initialize KAN spline coefficients
+  before plotting or training.
+"""
+
+
 import torch
 import torch.nn.functional as F
 

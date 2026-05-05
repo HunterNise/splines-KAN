@@ -1,3 +1,17 @@
+"""
+[task1-solver/NN1] Batch solver across all samples and all parameterization methods.
+
+Extends main.py to run the NN1 solver on every sample in the DNN-Solver dataset for each
+parameterization method. Changes vs main.py:
+- Loops over all point-cloud files in bspline-data/pts/ (not one hardcoded sample).
+- Iterates over three parameterization methods: uniform, chord_length, centripetal.
+- Resets model weights via reset_parameters() between samples for independent runs.
+- Results and figures organized into per-method output directories:
+  outputs-uniform/, outputs-chord_length/, outputs-centripetal/.
+- Convergence-check printing suppressed; tqdm progress bar used instead.
+"""
+
+
 import torch
 from torch import nn
 import torch.nn.functional as F

@@ -10,6 +10,21 @@ https://github.com/zepengwen/DNN-Solver/
 
 ---
 
+After extracting, the file structure should be:
+```
+DNN-Solver/
+├── bspline-data/
+│   ├── control/
+│   ├── knot/
+│   └── pts/
+├── curve-data/
+└── func-data/
+```
+
+NOTE: there is a spelling mistake for `curve-data`, rename appropriately.
+
+---
+
 From the article:
 
 > 1) **B-spline dataset.** In the B-spline set, $100$ cubic B-spline curves are randomly generated, and $201$ data points are sampled uniformly from each B-spline curve. The knots of sampled B-splines are generated based on a uniform distribution, and the range of knot number is $[3, 12]$. Control points are randomly generated based on the standard normal distribution.

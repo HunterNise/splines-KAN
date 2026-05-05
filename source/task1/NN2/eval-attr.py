@@ -1,3 +1,18 @@
+"""
+[task1/NN2] Attribution evaluation — gradient saliency for the NN2 model.
+
+Extends the standard evaluation with Jacobian-based input attribution analysis.
+Loads model weights and hyperparameters from outputs/, evaluates on samples from both
+the official training set (2d_train.npz) and eval set (2d_eval.npz), and for each sample:
+- Computes the prediction error and the predicted knot vector (as in eval.py).
+- Computes the saliency Jacobian J[j,i] = ||∂t_j/∂x_i||₂ for each interior knot t_j
+  and input point x_i, measuring how sensitive each predicted knot is to each input point.
+- Aggregates over all interior knots to produce a per-point importance score.
+- Saves results (error, knots, controls, saliency, Jacobian) and a curve_fit + saliency
+  overlay plot for each sample to outputs/eval-attr/.
+"""
+
+
 import torch
 from torch import nn
 import torch.nn.functional as F

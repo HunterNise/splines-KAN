@@ -1,3 +1,4 @@
+""" KAN example script """
 # https://kindxiaoming.github.io/pykan/intro.html
 
 

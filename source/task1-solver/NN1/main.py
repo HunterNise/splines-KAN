@@ -1,3 +1,17 @@
+"""
+[task1-solver/NN1] Neural network B-spline knot optimizer — float64, deeper network, single sample.
+
+Refines the NN0 experiment. Changes vs NN0:
+- Double-precision (float64) for better numerical stability; convergence tolerance = machine eps.
+- B-spline utilities imported from source.functions instead of defined inline.
+- Deeper architecture: two sequential MLP stacks (stack1, stack2) each with one hidden
+  layer (128 neurons) and a Softmax output, applied in series.
+- 6 internal knots (num_knots=6) vs 5; sample spl_data10.txt (which has 6 knots).
+- Longer training: 2000 iterations.
+- Results (error, knots, controls) and figures (loss curve, curve fit) written to outputs/.
+"""
+
+
 import torch
 from torch import nn
 import torch.nn.functional as F
