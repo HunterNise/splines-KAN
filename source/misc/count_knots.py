@@ -1,7 +1,8 @@
 import os
 import numpy as np
+from source.functions import ROOT
 
-path = "/app/data/DNN-Solver/bspline-data/knot/"
+path = ROOT + "/data/DNN-Solver/bspline-data/knot/"
 
 for filename in sorted(os.listdir(path)):
     if filename.endswith(".txt"):

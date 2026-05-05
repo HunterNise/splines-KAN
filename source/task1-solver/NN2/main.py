@@ -13,7 +13,7 @@ torch.manual_seed(0)
 # --------------------------------------------------
 
 # Load 2D points from text file
-path = "/app/data/DNN-Solver/bspline-data/pts/spl_data10.txt"
+path = ROOT + "/data/DNN-Solver/bspline-data/pts/spl_data10.txt"
 points = np.loadtxt(path)
 
 num_points, dim = points.shape

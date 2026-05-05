@@ -6,7 +6,7 @@
 
 subsection Dataset
   # Path to the training dataset (.npz file)
-  set Path             = /app/data/SplinegenDataset/2d_train.npz
+  set Path             = data/SplinegenDataset/2d_train.npz
   # Number of knots (without repetitions/clamping)
   set Number of knots  = 6
   # Number of data points sampled from each B-spline curve

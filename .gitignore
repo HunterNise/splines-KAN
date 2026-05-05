@@ -9,3 +9,6 @@ data/
 
 **/model.py
 **/train.prm
+
+.mode
+.venv/

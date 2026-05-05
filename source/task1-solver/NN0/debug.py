@@ -3,6 +3,7 @@ from torch import nn
 import torch.nn.functional as F
 
 import numpy as np
+from source.functions import ROOT
 
 # Set seed for reproducibility
 torch.manual_seed(0)
@@ -32,7 +33,7 @@ BASIS_FNS       = False
 # --------------------------------------------------
 
 # Load 2D points from text file
-path = "/app/data/DNN-Solver/bspline-data/pts/spl_data00.txt"
+path = ROOT + "/data/DNN-Solver/bspline-data/pts/spl_data00.txt"
 points = np.loadtxt(path)
 
 # Check if GPU is available and set device accordingly

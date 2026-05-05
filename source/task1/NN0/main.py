@@ -51,7 +51,7 @@ degree = 3          # degree of the B-spline curve
 method = "uniform"  # method to compute parameter values corresponding to data points
 
 
-path = "/app/data/DNN-Solver/bspline-data"
+path = ROOT + "/data/DNN-Solver/bspline-data"
 
 class BSplineDataset(Dataset):
     def __init__(self, indices, path, degree=3):

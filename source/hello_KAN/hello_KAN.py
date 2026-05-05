@@ -2,9 +2,10 @@
 
 
 import os
-# Change the working directory to the current file's directory to ensure that the figures are saved in the correct location
-output_dir = os.path.join(os.path.dirname(__file__), "outputs-3")
+# create output folder if it doesn't exist
+output_dir = os.path.join(os.path.dirname(__file__), "outputs")
 os.makedirs(output_dir, exist_ok=True)
+# Change the working directory to the current file's directory to ensure that the figures are saved in the correct location
 os.chdir(output_dir)
 
 import sys

@@ -21,6 +21,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 
+# Project root path: functions.py lives at source/functions.py, so two levels up is always the project root,
+#   whether running inside Docker (/app) or natively via uv (the actual checkout directory).
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 
 # ==================================================
 

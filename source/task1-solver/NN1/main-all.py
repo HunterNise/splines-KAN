@@ -139,7 +139,7 @@ def train(model, points, method="uniform",
 # --------------------------------------------------
 
 # directory containing the input data files for training
-dir = "/app/data/DNN-Solver/bspline-data/pts/"
+dir = ROOT + "/data/DNN-Solver/bspline-data/pts/"
 
 for method in ["uniform", "chord_length", "centripetal"]:
     # create output folder if it doesn't exist

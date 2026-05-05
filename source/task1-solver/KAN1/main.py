@@ -21,7 +21,7 @@ os.chdir(output_dir)
 # --------------------------------------------------
 
 # Load 2D points from text file
-path = "/app/data/DNN-Solver/bspline-data/pts/spl_data10.txt"
+path = ROOT + "/data/DNN-Solver/bspline-data/pts/spl_data10.txt"
 points = np.loadtxt(path)
 
 # Check if GPU is available and set device accordingly
