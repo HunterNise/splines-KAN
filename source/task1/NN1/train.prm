@@ -1,0 +1,36 @@
+# Training configuration for the NN1 B-spline knot prediction model.
+# Parameter file following the deal.II .prm convention:
+#   subsection <Name>
+#     set <Key> = <Value>
+#   end
+
+subsection Dataset
+  # Path to the training dataset (.npz file)
+  set Path             = /app/data/SplinegenDataset/2d_train.npz
+  # Number of knots (without repetitions/clamping)
+  set Number of knots  = 6
+  # Number of data points sampled from each B-spline curve
+  set Number of points = 100
+end
+
+subsection Model
+  # Number of neurons in each hidden layer
+  set Number of neurons = 256
+  # Dropout probability applied after each hidden ReLU layer
+  set Dropout           = 0.00
+end
+
+subsection Training
+  # Number of samples processed per gradient update
+  set Batch size       = 64
+  # Maximum number of training epochs
+  set Number of epochs = 300
+  # Learning rate for the Adam optimizer
+  set Learning rate    = 1e-3
+  # Weight of the supervised (MSE) knot loss relative to the physics loss; set to 0.0 for physics loss only
+  set Beta             = 0.0
+  # Number of epochs without improvement before triggering early stopping
+  set Patience          = 15
+  # Save a checkpoint to disk every this many epochs (1 = every epoch, 0 = disable)
+  set Checkpoint interval   = 10
+end

@@ -12,13 +12,13 @@ PYTHON_FLAGS=""
 PASSTHROUGH=()
 for arg in "$@"; do
     case "$arg" in
-        train|eval) SCRIPT="$arg" ;;
+        train|eval|eval-attr) SCRIPT="$arg" ;;
         -O)         PYTHON_FLAGS="-O" ;;
         *)          PASSTHROUGH+=("$arg") ;;
     esac
 done
 if [ -z "$SCRIPT" ]; then
-    echo "Usage: $(basename "${BASH_SOURCE[0]}") train|eval [-O] [...]" >&2
+    echo "Usage: $(basename "${BASH_SOURCE[0]}") train|eval|eval-attr [-O] [...]" >&2
     exit 1
 fi
 

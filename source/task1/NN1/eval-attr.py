@@ -195,7 +195,7 @@ for mode in modes:
 
     # Evaluation loop to test the trained model on unseen data points from the test set and compute the B-spline fitting error.
 
-    eval_dir = os.path.join(output_dir, "eval")
+    eval_dir = os.path.join(output_dir, "eval-attr")
     os.makedirs(eval_dir, exist_ok=True)
 
     for i, (pts_flat, label) in enumerate(loader):
@@ -221,12 +221,43 @@ for mode in modes:
 
         full_knots = full_knots.cpu().numpy()
         controls = controls.cpu().numpy()
+        points_np = points.cpu().numpy()
 
+        # --- Gradient saliency ---
+        # Compute the Jacobian J[j, i] = || ∂t_j / ∂x_i ||_2
+        # where t_j is the j-th interior (free) knot and x_i is the i-th input point.
+        # This quantifies how sensitive each predicted knot is to each input point.
+        x_sal = pts_flat.detach().requires_grad_(True)   # (num_points * dim,)
+
+        pred_knots_sal = model(x_sal.unsqueeze(0)).squeeze(0)
+        full_knots_sal = torch.cat((
+            torch.zeros(degree + 1, dtype=pred_knots_sal.dtype, device=pred_knots_sal.device),
+            pred_knots_sal[1:-1],
+            torch.ones( degree + 1, dtype=pred_knots_sal.dtype, device=pred_knots_sal.device)
+        ))
+
+        # extract only the free (interior) knots — the endpoints are clamped constants
+        interior_knots_sal = full_knots_sal[degree + 1 : -(degree + 1)]
+        num_free = interior_knots_sal.shape[0]
+
+        # Jacobian tensor: J[j, i, d] = ∂t_j / ∂x_{i,d}
+        jacobian = torch.zeros(num_free, num_points, dim, dtype=precision)
+        for j in range(num_free):
+            if x_sal.grad is not None:
+                x_sal.grad.zero_()
+            interior_knots_sal[j].backward(retain_graph=(j < num_free - 1))
+            jacobian[j] = x_sal.grad.view(num_points, dim).abs()
+
+        # per-knot per-point saliency: L2 norm over coordinate dims  (num_free, num_points)
+        knot_jacobian  = jacobian.norm(dim=-1).detach().cpu().numpy()
+        # aggregate over all interior knots -> single importance score per point  (num_points,)
+        point_saliency = knot_jacobian.mean(axis=0)
 
         print(f"\n{mode} sample {i}:")
         print(f"  Error: {err:.16f}")
         print(f"  True interior knots: {label.cpu().numpy()}")
         print(f"  Pred interior knots: {pred_knots[1:-1].cpu().numpy()}")
+        print(f"  Point saliency (mean |∂tⱼ/∂xᵢ|): {point_saliency}")
 
         # print final results to file
         results_path = os.path.join(eval_dir, f"{mode}{i}-results.txt")
@@ -235,7 +266,10 @@ for mode in modes:
             f.write(f"Degree: {degree}\n\n")
             f.write(f"Knots:\n{full_knots}\n\n")
             f.write(f"Controls:\n{controls}\n\n")
+            f.write(f"Point saliency (mean |∂tⱼ/∂xᵢ| over interior knots):\n{point_saliency}\n\n")
+            f.write(f"Knot-point Jacobian (num_free_knots × num_points):\n{knot_jacobian}\n\n")
 
-        # plot the final curve fit to file
-        plot_curve_fit(points, full_knots, degree, controls, err, 
+        # plot the final curve fit with saliency attribution to file
+        plot_curve_fit_saliency(points_np, full_knots, degree, controls, err,
+                        point_saliency, knot_jacobian,
                         path = eval_dir, name = f"{mode}{i}-curve_fit.png")

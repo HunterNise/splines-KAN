@@ -6,3 +6,6 @@ data/
 **/outputs*/
 **/figures/
 **/model/
+
+**/model.py
+**/train.prm

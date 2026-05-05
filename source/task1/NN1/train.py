@@ -9,6 +9,7 @@ from source.functions import *
 
 
 import os
+import shutil
 
 from tqdm import tqdm
 
@@ -42,12 +43,60 @@ eps = torch.finfo(precision).eps    # machine epsilon for the chosen precision, 
 
 # --------------------------------------------------
 
+# Parse parameter file
+
+class PrmParser:
+    """Simple parser for deal.II-style .prm parameter files.
+    Supports subsection/end blocks, set Key = Value entries, and # comments.
+    """
+    def __init__(self):
+        self._data  = {}
+        self._stack = []
+
+    def parse(self, path):
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if line.lower().startswith('subsection '):
+                    self._stack.append(line[len('subsection '):].strip())
+                elif line.lower() == 'end':
+                    self._stack.pop()
+                elif line.lower().startswith('set '):
+                    rest        = line[4:]
+                    key, _, val = rest.partition('=')
+                    full_key    = tuple(self._stack + [key.strip()])
+                    self._data[full_key] = val.strip()
+        return self
+
+    def get(self, *keys):
+        return self._data[tuple(keys)]
+
+    def get_int(self, *keys):
+        return int(self.get(*keys))
+
+    def get_float(self, *keys):
+        return float(self.get(*keys))
+
+
+prm_file = os.path.join(os.path.dirname(__file__), "train.prm")
+prm      = PrmParser().parse(prm_file)
+
+# save a copy of the parameter file in the output folder
+shutil.copy2(prm_file, os.path.join(output_dir, "train.prm"))
+
+# save a copy of the model architecture file in the output folder
+arch_file = os.path.join(os.path.dirname(__file__), "model.py")
+shutil.copy2(arch_file, os.path.join(output_dir, "model.py"))
+
+# --------------------------------------------------
+
 # Load points from text file
 
-path = "/app/data/SplinegenDataset/2d_train.npz"
-
-num_knots = 6       # number of knots (without repetitions/clamping)
-num_points = 100    # number of data points sampled from the B-spline curve
+path       = prm.get("Dataset", "Path")                     # path to the training dataset
+num_knots  = prm.get_int("Dataset", "Number of knots")      # number of knots (without repetitions/clamping)
+num_points = prm.get_int("Dataset", "Number of points")     # number of data points sampled from the B-spline curve
 
 
 class BSplineDataset(Dataset):
@@ -115,7 +164,7 @@ n_test  = len(dataset) - n_train
 train_set, test_set = random_split(dataset, [n_train, n_test],
                                    generator=torch.Generator().manual_seed(0))
 
-batch_size   = 64
+batch_size   = prm.get_int("Training", "Batch size")
 train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
 test_loader  = DataLoader(test_set,  batch_size=batch_size, shuffle=False)
 
@@ -124,13 +173,16 @@ test_loader  = DataLoader(test_set,  batch_size=batch_size, shuffle=False)
 # Define the neural network model to approximate the mapping
 #   from input data points to a final knot vector that minimizes the B-spline error.
 
+# import class from file model.py in the same directory
 from .model import NN
 
 
-num_neurons = 256                   # number of neurons in each hidden layer
-dropout     = 0.1                   # dropout probability applied after each hidden ReLU
+num_neurons = prm.get_int("Model", "Number of neurons")     # number of neurons in each hidden layer
+dropout     = prm.get_float("Model", "Dropout")             # dropout probability applied after each hidden ReLU
+
 # create model instance and move to device
 model = NN(num_points, dim, num_knots, num_neurons, degree, dropout).to(device)
+
 
 # print architecture and number of parameters to file
 summary_path = os.path.join(output_dir, "summary.txt")
@@ -195,7 +247,8 @@ def compute_epoch_loss(model, loader, beta):
 
 
 def train(model, train_loader, test_loader,
-          num_epochs=100, tol=1e-6, lr=1e-3, beta=0.0, patience=10):
+          num_epochs=100, tol=1e-6, lr=1e-3, beta=0.0, patience=10,
+          checkpoint_file=None, checkpoint_interval=5):
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.5, patience=5)
@@ -206,12 +259,28 @@ def train(model, train_loader, test_loader,
     dim        = model.dim
     degree     = model.degree
 
-    best_test_mean  = float("inf")
-    best_state      = None
+    best_test_mean   = float("inf")
+    best_state       = None
     patience_counter = 0
+    start_epoch      = 0
+
+    # resume from checkpoint if one exists (unfinished previous run)
+    if checkpoint_file is not None and os.path.exists(checkpoint_file):
+        print(f"Resuming from checkpoint '{checkpoint_file}' ...")
+        ckpt = torch.load(checkpoint_file, map_location=device)
+        model.load_state_dict(ckpt['model_state_dict'])
+        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        scheduler.load_state_dict(ckpt['scheduler_state_dict'])
+        train_losses     = ckpt['train_losses']
+        test_losses      = ckpt['test_losses']
+        best_test_mean   = ckpt['best_test_mean']
+        best_state       = ckpt['best_state']
+        patience_counter = ckpt['patience_counter']
+        start_epoch      = ckpt['epoch'] + 1
+        print(f"  Resumed at epoch {start_epoch} (best test mean so far: {best_test_mean:.6f})")
 
     # loop until reaching maximum number of epochs or early stopping
-    for epoch in range(num_epochs):
+    for epoch in range(start_epoch, num_epochs):
         batch_losses = []
         model.train()
         # loop through batches of data points from the training set
@@ -290,29 +359,53 @@ def train(model, train_loader, test_loader,
                 print(f"Early stopping at epoch {epoch} (patience={patience})")
                 break
 
+        # save checkpoint at the end of every epoch so training can be resumed if interrupted
+        if checkpoint_file is not None and checkpoint_interval > 0 and (epoch + 1) % checkpoint_interval == 0:
+            torch.save({
+                'epoch'                : epoch,
+                'model_state_dict'     : model.state_dict(),
+                'optimizer_state_dict' : optimizer.state_dict(),
+                'scheduler_state_dict' : scheduler.state_dict(),
+                'train_losses'         : train_losses,
+                'test_losses'          : test_losses,
+                'best_test_mean'       : best_test_mean,
+                'best_state'           : best_state,
+                'patience_counter'     : patience_counter,
+            }, checkpoint_file)
+
     if best_state is not None:
         model.load_state_dict(best_state)   # restore best weights
 
+    # remove checkpoint on clean completion — the final model.pth takes over
+    if checkpoint_file is not None and os.path.exists(checkpoint_file):
+        os.remove(checkpoint_file)
+
     return train_losses, test_losses
 
+# --------------------------------------------------
 
 model_file        = os.path.join(output_dir, "model.pth")
 train_losses_file = os.path.join(output_dir, "train_losses.npy")
 test_losses_file  = os.path.join(output_dir, "test_losses.npy")
 training_file     = os.path.join(output_dir, "training_info.txt")
+checkpoint_file   = os.path.join(output_dir, "checkpoint.pth")  # temporary; deleted on clean completion
 
-# train the model and save it to file
 
-num_epochs  = 300       # maximum number of epochs to train for
-lr          = 1e-3      # learning rate
-beta        = 0.5       # supervised loss weight; set to 0.0 to train with physics loss only
-patience    = 15        # early stopping patience
+num_epochs  = prm.get_int("Training", "Number of epochs")       # maximum number of epochs to train for
+lr          = prm.get_float("Training", "Learning rate")        # learning rate
+beta        = prm.get_float("Training", "Beta")                 # supervised loss weight; set to 0.0 to train with physics loss only
+patience    = prm.get_int("Training", "Patience")               # early stopping patience
+checkpoint_interval = prm.get_int("Training", "Checkpoint interval")    # save a checkpoint to disk every this many epochs (1 = every epoch, 0 = disable)
 
+# train the model and get training/test loss curves
 train_losses, test_losses = train(
     model, train_loader, test_loader,
-    num_epochs=num_epochs, tol=eps, lr=lr, beta=beta, patience=patience
+    num_epochs=num_epochs, tol=eps, lr=lr, beta=beta, patience=patience,
+    checkpoint_file=checkpoint_file, checkpoint_interval=checkpoint_interval
 )
 
+
+# save model and training information to files for later evaluation and plotting
 torch.save({
     'model_state_dict'  : model.state_dict(),
     'num_points'        : num_points,
@@ -323,9 +416,11 @@ torch.save({
     'dropout'           : dropout,
 }, model_file)
 
+# save training and test losses as numpy arrays for later plotting
 np.save(train_losses_file, np.array(train_losses, dtype=np.float64))
 np.save(test_losses_file,  np.array(test_losses,  dtype=np.float64))
 
+# save training information and final results to a text file
 with open(training_file, "w") as f:
     f.write("\nDataset information:\n")
     f.write(f"  Path: {path}\n")
@@ -338,14 +433,15 @@ with open(training_file, "w") as f:
     f.write(f"  Dropout: {dropout}\n")
     f.write(f"  Batch size: {batch_size}\n")
     f.write(f"  Number of epochs: {num_epochs}\n")
-    f.write(f"  Learning rate: {lr:.e}\n")
+    f.write(f"  Learning rate: {lr}\n")
     f.write(f"  Beta (supervised loss weight): {beta}\n")
     f.write(f"  Patience (early stopping): {patience} epochs\n")
 
     f.write("\nTraining information and final results:\n")
     f.write(f"  Training completed in {len(train_losses)} epochs.\n")
     f.write(f"  Final train loss: {train_losses[-1][0]:>.6f}\n")
-    f.write(f"  Final test loss:  {test_losses[-1][0]:>.6f}\n")
+    f.write(f"  Final test loss: {test_losses[-1][0]:>.6f}\n")
+    f.write(f"  Best test loss: {min(test_losses, key=lambda x: x[0])[0]:>.6f}\n")
 
 
 # plot training and test loss curves
