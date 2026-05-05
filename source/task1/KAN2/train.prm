@@ -1,0 +1,41 @@
+# Training configuration for the KAN2 B-spline knot prediction model.
+# Parameter file following the deal.II .prm convention:
+#   subsection <Name>
+#     set <Key> = <Value>
+#   end
+
+
+subsection Dataset
+  # Path to the training dataset (.npz file)
+  set Path             = data/SplinegenDataset/2d_train.npz
+  # Number of knots (without repetitions/clamping)
+  set Number of knots  = 5
+  # Number of data points sampled from each B-spline curve
+  set Number of points = 30
+end
+
+subsection Model
+  # Number of hidden neurons in the KAN hidden layer
+  set Number of hidden neurons = 30
+  # Number of grid intervals per spline activation function
+  set Grid intervals           = 5
+  # Spline order for KAN edge activations (3 = cubic)
+  set Spline order             = 3
+end
+
+subsection Training
+  # Number of samples processed per gradient update
+  set Batch size       = 64
+  # Maximum number of training epochs
+  set Number of epochs = 300
+  # Learning rate for the Adam optimizer
+  set Learning rate    = 1e-3
+  # Weight of the supervised (MSE) knot loss relative to the physics loss; set to 0.0 for physics loss only
+  set Beta             = 0.0
+  # Number of epochs without improvement before triggering early stopping
+  set Patience         = 15
+  # Refine KAN spline grids from observed activations every this many epochs (0 = disable)
+  set Grid update interval = 10
+  # Save a checkpoint to disk every this many epochs (1 = every epoch, 0 = disable)
+  set Checkpoint interval = 10
+end
