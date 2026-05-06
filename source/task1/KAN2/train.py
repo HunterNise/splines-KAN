@@ -4,7 +4,7 @@
 Replaces the MLP backbone from NN2 with a Kolmogorov-Arnold Network (KAN) while
 keeping the same dataset, training pipeline, and software-engineering conventions.
 Changes vs task1/NN2/train.py:
-- Model: KAN([num_points*dim, num_hidden, num_intervals]) with learnable cubic B-spline
+- Model: KAN([num_points*dim, *hidden_layers, num_intervals]) with learnable cubic B-spline
   activations on each edge, instead of Linear+ReLU+Dropout stacks.
   Input:  flattened data points (num_points*dim,).
   Output: num_intervals values passed through softmax → cumsum → knots.
@@ -191,27 +191,31 @@ test_loader  = DataLoader(test_set,  batch_size=batch_size, shuffle=False)
 # Define the KAN model to approximate the mapping
 #   from input data points to a final knot vector that minimizes the B-spline error.
 #
-# Architecture: [num_points*dim] -> [num_hidden] -> [num_intervals]
+# Architecture: [num_points*dim] -> hidden_layers -> [num_intervals]
 #   - Input:  flattened data points (num_points * dim,)
 #   - Output: num_intervals values passed through softmax → cumsum → knots
+#   - Hidden layer widths are read from the prm file (comma-separated) so the
+#     depth and width of the KAN can be changed without touching the code.
 #
 # Unlike a vanilla NN, KAN places learnable univariate spline functions on each edge
 # (connection) rather than fixed activation functions on nodes, giving it more expressive
 # power per parameter for smooth function approximation.
 
-num_hidden      = prm.get_int("Model", "Number of hidden neurons")  # number of hidden neurons in the KAN hidden layer
+hidden_layers   = [int(x) for x in prm.get("Model", "Hidden layers").split(",")]  # hidden layer widths (comma-separated in prm)
 grid_intervals  = prm.get_int("Model", "Grid intervals")            # number of grid intervals per spline activation function
 spline_order    = prm.get_int("Model", "Spline order")              # spline order for KAN edge activations
 
 num_intervals = num_knots - 1   # KAN output dimension (intervals between knots)
+# full width list: input and output dims are derived from dataset params; only hidden layers come from the prm
+width = [num_points * dim] + hidden_layers + [num_intervals]
 
 model = KAN(
-    width     = [num_points * dim, num_hidden, num_intervals],  # layer sizes (input, hidden, output)
-    grid      = grid_intervals,                                 # number of grid intervals per spline activation
-    k         = spline_order,                                   # spline order (3 = cubic B-splines on edges)
-    seed      = 0,                                              # random seed for reproducibility
+    width     = width,          # layer sizes: [input] + hidden_layers + [output]
+    grid      = grid_intervals, # number of grid intervals per spline activation
+    k         = spline_order,   # spline order (3 = cubic B-splines on edges)
+    seed      = 0,              # random seed for reproducibility
     device    = device,
-    auto_save = False,                                          # disable automatic checkpoint saving
+    auto_save = False,          # disable automatic checkpoint saving
 )
 
 
@@ -243,6 +247,7 @@ with open(summary_path, "w") as f:
     f.write(f"\nInput dimension:  {num_points * dim} = {num_points} * {dim}  (flattened data points)")
     f.write(f"\nOutput dimension: {num_intervals} (predicted intervals, softmax-normalized -> cumsum -> {num_knots} knots)")
     f.write(f"\nB-spline degree:  {degree}")
+    f.write(f"\nKAN width:          {width}")
     f.write(f"\nKAN grid intervals: {grid_intervals}")
     f.write(f"\nKAN spline order:   {spline_order}")
 
@@ -475,7 +480,7 @@ torch.save({
     'num_points'        : num_points,
     'dim'               : dim,
     'num_knots'         : num_knots,
-    'num_hidden'        : num_hidden,
+    'width'             : width,
     'grid_intervals'    : grid_intervals,
     'spline_order'      : spline_order,
     'degree'            : degree,
@@ -495,7 +500,7 @@ with open(training_file, "w") as f:
     f.write(f"  Number of test samples: {len(test_set)}\n")
 
     f.write("\nTraining configuration:\n")
-    f.write(f"  KAN hidden neurons: {num_hidden}\n")
+    f.write(f"  KAN width:          {width}\n")
     f.write(f"  KAN grid intervals: {grid_intervals}\n")
     f.write(f"  KAN spline order:   {spline_order}\n")
     f.write(f"  KAN grid update interval: {grid_update_interval}\n")

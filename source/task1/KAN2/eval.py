@@ -117,14 +117,13 @@ ckpt = torch.load(model_file, map_location=device)
 num_points      = ckpt['num_points']
 dim             = ckpt['dim']
 num_knots       = ckpt['num_knots']
-num_hidden      = ckpt['num_hidden']
+width           = ckpt['width']
 grid_intervals  = ckpt['grid_intervals']
 spline_order    = ckpt['spline_order']
 degree          = ckpt['degree']
-num_intervals   = num_knots - 1
 
 model = KAN(
-    width     = [num_points * dim, num_hidden, num_intervals],
+    width     = width,          # restored from checkpoint: [input] + hidden_layers + [output]
     grid      = grid_intervals,
     k         = spline_order,
     seed      = 0,
