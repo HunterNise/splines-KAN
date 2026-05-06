@@ -17,5 +17,6 @@ data/
 **/model/
 
 # model architecture and training parameters files
-**/model.py
-**/train.prm
+#**/model.py
+#**/train.prm
+# use git update-index --skip-worktree <file> to ignore changes to these files, but keep them in the repo
