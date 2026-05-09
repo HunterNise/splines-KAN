@@ -16,15 +16,150 @@ NOTE: torch implementations keep dtype/device and are differentiable by autograd
 import torch
 from torch import nn
 import torch.nn.functional as F
+from torch.utils.data import Dataset
 
 import numpy as np
 
 import matplotlib.pyplot as plt
 import os
 
+
+# ==================================================
+
+
+# --- Global variables ---
+
+
 # Project root path: functions.py lives at source/functions.py, so two levels up is always the project root,
 #   whether running inside Docker (/app) or natively via uv (the actual checkout directory).
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+# ==================================================
+
+
+# --- Classes ---
+
+
+class PrmParser:
+    """
+    Simple parser for deal.II-style .prm parameter files.
+    Supports subsection/end blocks, set Key = Value entries, and # comments.
+    """
+
+    def __init__(self):
+        self._data  = {}
+        self._stack = []
+
+    def parse(self, path):
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if line.lower().startswith('subsection '):
+                    self._stack.append(line[len('subsection '):].strip())
+                elif line.lower() == 'end':
+                    self._stack.pop()
+                elif line.lower().startswith('set '):
+                    rest        = line[4:]
+                    key, _, val = rest.partition('=')
+                    full_key    = tuple(self._stack + [key.strip()])
+                    self._data[full_key] = val.strip()
+        return self
+
+    def get(self, *keys):
+        return self._data[tuple(keys)]
+
+    def get_int(self, *keys):
+        return int(self.get(*keys))
+
+    def get_float(self, *keys):
+        return float(self.get(*keys))
+
+# --------------------------------------------------
+
+class BSplineDataset(Dataset):
+    """
+    PyTorch Dataset for B-spline curve fitting.
+
+    This follows a simplified version of Splinegen dataset format,
+      a .npz file which contains:
+        - 'knots': padded knot vectors
+        - 'ctrl_pts': padded control points
+        - 'degree': B-spline degree
+    
+    Only curves with the specified number of interior knots (num_knots) are loaded.
+    The curves are then re-sampled at a fixed number of points (num_points)
+      and re-parameterized uniformly in [0, 1].
+    
+    Each sample consists of:
+        - Flattened data points sampled from the B-spline curve.
+        - Interior knots as labels (excluding clamping knots).
+        - Parameter grid used for evaluation.
+
+    Parameters
+    ----------
+    path : str
+        Path to the .npz file containing the dataset.
+    num_knots : int
+        Number of knots (excluding clamping knots) to filter curves.
+    num_points : int, optional
+        Number of points to sample from each B-spline curve (default is 100).
+    """
+
+    def __init__(self, path, num_knots, num_points=100):
+        self.samples = []
+
+        with np.load(path) as data:
+            knots       = data['knots']
+            ctrl_pts    = data['ctrl_pts']
+            degree      = data['degree']
+
+        self.degree = int(degree)
+        self.dim = ctrl_pts.shape[2]
+
+        
+        # filter curves whose knot count matches num_knots
+        
+        d = self.degree
+        # formula derived from the padded representation:
+        #   count_nonzero counts the (num_knots-2) interior knots plus (d+1) trailing ones
+        knot_count = np.count_nonzero(knots, axis=1) + (d + 1) - 2 * d
+        mask = knot_count == num_knots      # bool (N_ds,)
+
+        knots    = knots[mask]              # (N, max_knots_padded)
+        ctrl_pts = ctrl_pts[mask]           # (N, max_ctrl, dim)
+
+        # actual (unpadded) sizes for this num_knots
+        full_knot_len   = num_knots + 2 * d         # full clamped knot vector length
+        n_ctrl          = num_knots + d - 1         # number of control points
+
+        
+        # resample curves at num_points uniform parameter values in [0, 1]
+        
+        t_grid = torch.linspace(0.0, 1.0, num_points, dtype=torch.float64)
+
+        # loop over samples
+        for i in range(len(ctrl_pts)):
+            # discard trailing zeros from the padded representation and convert to torch tensors
+            full_knots  = torch.tensor(knots[i, :full_knot_len], dtype=torch.float64)
+            ctrls       = torch.tensor(ctrl_pts[i, :n_ctrl],     dtype=torch.float64)   # (n_ctrl, dim)
+
+            # evaluate B-spline at num_points parameter values
+            B   = bspline_basis_matrix(t_grid, full_knots, d, soft=False)       # (num_points, n_ctrl)
+            pts = B @ ctrls                                                     # (num_points, dim)
+
+            # interior knots as labels (exclude the d+1 leading zeros and d+1 trailing ones)
+            interior_knots = full_knots[d + 1 : -(d + 1)]       # (num_knots - 2,)
+
+            self.samples.append((pts.reshape(-1), interior_knots, t_grid))
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        return self.samples[idx]
 
 
 # ==================================================
@@ -1152,6 +1287,30 @@ def plot_train_losses(train_losses, log=True,
     fig.savefig(os.path.join(path, name))
     plt.close(fig)
 
+def plot_train_and_test_losses(train_losses, test_losses, log=True,
+                               path=None, name="train_vs_test_losses.png"):
+    epochs = np.arange(len(train_losses))
+    
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.plot(epochs, np.array(train_losses)[:, 0], label="Train mean", color="steelblue", linewidth=2)
+    ax.plot(epochs, np.array(test_losses)[:, 0],  label="Test mean",  color="tomato",    linewidth=2)
+    
+    ax.set_xlabel("Epoch")
+    if log:
+        ax.set_yscale("log")
+        ax.set_ylabel("Loss (log scale)")
+    else:
+        ax.set_ylabel("Loss")
+    ax.set_title("Train vs Test Loss")
+    
+    ax.grid(True, which="both", linestyle="--", linewidth=0.5)
+    ax.legend()
+    fig.tight_layout()
+    
+    fig.savefig(os.path.join(path, name))
+    plt.close(fig)
+
+# --------------------------------------------------
 
 def plot_curve_2D(knots, degree, controls, 
                   path=None, name="curve.png"):

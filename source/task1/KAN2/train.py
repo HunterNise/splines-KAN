@@ -66,41 +66,6 @@ eps = torch.finfo(precision).eps    # machine epsilon for the chosen precision, 
 
 # Parse parameter file
 
-class PrmParser:
-    """Simple parser for deal.II-style .prm parameter files.
-    Supports subsection/end blocks, set Key = Value entries, and # comments.
-    """
-    def __init__(self):
-        self._data  = {}
-        self._stack = []
-
-    def parse(self, path):
-        with open(path) as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                if line.lower().startswith('subsection '):
-                    self._stack.append(line[len('subsection '):].strip())
-                elif line.lower() == 'end':
-                    self._stack.pop()
-                elif line.lower().startswith('set '):
-                    rest        = line[4:]
-                    key, _, val = rest.partition('=')
-                    full_key    = tuple(self._stack + [key.strip()])
-                    self._data[full_key] = val.strip()
-        return self
-
-    def get(self, *keys):
-        return self._data[tuple(keys)]
-
-    def get_int(self, *keys):
-        return int(self.get(*keys))
-
-    def get_float(self, *keys):
-        return float(self.get(*keys))
-
-
 prm_file = os.path.join(os.path.dirname(__file__), "train.prm")
 prm      = PrmParser().parse(prm_file)
 
@@ -113,66 +78,11 @@ shutil.copy2(prm_file, os.path.join(output_dir, "train.prm"))
 
 path        = os.path.join(ROOT, prm.get("Dataset", "Path"))    # path to the training dataset; prepend ROOT to get absolute path
 
-num_knots   = prm.get_int("Dataset", "Number of knots")      # number of knots (without repetitions/clamping)
-num_points  = prm.get_int("Dataset", "Number of points")     # number of data points sampled from the B-spline curve
+num_knots   = prm.get_int("Dataset", "Number of knots")     # number of knots (without repetitions/clamping)
+num_points  = prm.get_int("Dataset", "Number of points")    # number of data points sampled from the B-spline curve
 
 
-class BSplineDataset(Dataset):
-    def __init__(self, path, num_knots, num_points=100):
-        self.samples = []
-
-        with np.load(path) as data:
-            knots       = data['knots']
-            ctrl_pts    = data['ctrl_pts']
-            degree      = data['degree']
-
-        self.degree = int(degree)
-        self.dim = ctrl_pts.shape[2]
-
-        
-        # filter curves whose knot count matches num_knots
-        
-        d = self.degree
-        # formula derived from the padded representation:
-        #   count_nonzero counts the (num_knots-2) interior knots plus (d+1) trailing ones
-        knot_count = np.count_nonzero(knots, axis=1) + (d + 1) - 2 * d
-        mask = knot_count == num_knots      # bool (N_ds,)
-
-        knots    = knots[mask]              # (N, max_knots_padded)
-        ctrl_pts = ctrl_pts[mask]           # (N, max_ctrl, dim)
-
-        # actual (unpadded) sizes for this num_knots
-        full_knot_len   = num_knots + 2 * d         # full clamped knot vector length
-        n_ctrl          = num_knots + d - 1         # number of control points
-
-        
-        # resample curves at num_points uniform parameter values in [0, 1]
-        
-        t_grid = torch.linspace(0.0, 1.0, num_points, dtype=torch.float64)
-
-        # loop over samples
-        for i in range(len(ctrl_pts)):
-            # discard trailing zeros from the padded representation and convert to torch tensors
-            full_knots  = torch.tensor(knots[i, :full_knot_len], dtype=torch.float64)
-            ctrls       = torch.tensor(ctrl_pts[i, :n_ctrl],     dtype=torch.float64)   # (n_ctrl, dim)
-
-            # evaluate B-spline at num_points parameter values
-            B   = bspline_basis_matrix(t_grid, full_knots, d, soft=False)       # (num_points, n_ctrl)
-            pts = B @ ctrls                                                     # (num_points, dim)
-
-            # interior knots as labels (exclude the d+1 leading zeros and d+1 trailing ones)
-            interior_knots = full_knots[d + 1 : -(d + 1)]       # (num_knots - 2,)
-
-            self.samples.append((pts.reshape(-1), interior_knots, t_grid))
-
-    def __len__(self):
-        return len(self.samples)
-
-    def __getitem__(self, idx):
-        return self.samples[idx]
-
-
-print(f"Loading dataset ...")
+print("Loading dataset ...")
 dataset = BSplineDataset(path, num_knots, num_points)
 degree  = dataset.degree        # degree of the B-spline curve
 dim     = dataset.dim           # dimension of the data points (2 for 2D, 3 for 3D)
@@ -220,10 +130,12 @@ model = KAN(
 
 
 def reinit_kan(model, loader):
-    """Warm-up forward pass with a real data batch to initialize KAN spline caches.
+    """
+    Warm-up forward pass with a real data batch to initialize KAN spline caches.
 
     KAN requires batch >= 2 (std uses Bessel's correction, which divides by n-1).
     Must be called before update_grid_from_samples() and before plotting.
+    
     """
     pts_batch, _, _ = next(iter(loader))
     pts_batch = pts_batch.to(device)
@@ -239,23 +151,24 @@ reinit_kan(model, train_loader)   # initialize activation caches before plotting
 
 # print architecture and number of parameters to file
 summary_path = os.path.join(output_dir, "summary.txt")
-print(f"Saving model summary ...")
+print("Saving model summary ...")
 with open(summary_path, "w") as f:
     f.write("\nModel architecture:\n")
     f.write(str(model) + "\n\n")
 
-    f.write(f"\nInput dimension:  {num_points * dim} = {num_points} * {dim}  (flattened data points)")
-    f.write(f"\nOutput dimension: {num_intervals} (predicted intervals, softmax-normalized -> cumsum -> {num_knots} knots)")
-    f.write(f"\nB-spline degree:  {degree}")
-    f.write(f"\nKAN width:          {width}")
+    f.write(f"\nInput dimension:    {num_points * dim} = {num_points} * {dim}  (flattened data points)")
+    f.write(f"\nOutput dimension:   {num_intervals} (intervals without clamping)")
+    f.write(f"\nB-spline degree:    {degree}")
+    
+    f.write(f"\n\nKAN width:        {width}")
     f.write(f"\nKAN grid intervals: {grid_intervals}")
     f.write(f"\nKAN spline order:   {spline_order}")
 
     total     = sum(param.numel() for param in model.parameters())
     trainable = sum(param.numel() for param in model.parameters() if param.requires_grad)
-    f.write(f"\n\nTotal parameters:     {total:>,.0f}")
-    f.write(f"\nTrainable parameters: {trainable:>,.0f}")
-    f.write(f"\nFrozen parameters:    {total - trainable:>,.0f}")
+    f.write(f"\n\nTotal parameters:   {total:>9,d}")
+    f.write(f"\nTrainable parameters: {trainable:>9,d}")
+    f.write(f"\nFrozen parameters:    {total - trainable:>9,d}")
 
 # --------------------------------------------------
 
@@ -347,14 +260,14 @@ def train(model, train_loader, test_loader,
 
         # loop through batches of data points from the training set
         for points_batch, labels_batch, params_batch in tqdm(train_loader, ncols=100, desc=f"Epoch {epoch}"):
-            points_batch = points_batch.to(device)         # (batch, num_points*dim)
-            labels_batch = labels_batch.to(device)
-            params_batch = params_batch.to(device)
+            points_batch = points_batch.to(device)      # (batch, num_points*dim)
+            labels_batch = labels_batch.to(device)      # (batch, num_knots-2)
+            params_batch = params_batch.to(device)      # (batch, num_points)
 
             # KAN forward pass: (batch, num_points*dim) -> (batch, num_intervals)
             pred_intervals_raw = model(points_batch)
             # apply softmax per sample so intervals are positive and sum to 1
-            pred_intervals = F.softmax(pred_intervals_raw, dim=1)           # (batch, num_intervals)
+            pred_intervals = F.softmax(pred_intervals_raw, dim=1)       # (batch, num_intervals)
             # prepend a zero column and cumsum to get knots in [0, 1]
             zero = torch.zeros(pred_intervals.shape[0], 1,
                                dtype=pred_intervals.dtype, device=pred_intervals.device)
@@ -387,7 +300,7 @@ def train(model, train_loader, test_loader,
                 # total loss for the sample is a combination of physics loss and supervised loss, weighted by a hyperparameter beta to balance the two components
                 batch_loss += physics_loss + beta * supervised_loss
 
-            batch_loss = batch_loss / batch_len   # mean over batch
+            batch_loss = batch_loss / batch_len     # mean over batch
             batch_losses.append(batch_loss.item())
 
             batch_loss.backward()       # compute gradients of the batch loss with respect to model parameters using backpropagation
@@ -427,7 +340,7 @@ def train(model, train_loader, test_loader,
                 print(f"Early stopping at epoch {epoch} (patience={patience})")
                 break
 
-        # save checkpoint at the end of every epoch so training can be resumed if interrupted
+        # save checkpoint so training can be resumed if interrupted
         if checkpoint_file is not None and checkpoint_interval > 0 and (epoch + 1) % checkpoint_interval == 0:
             torch.save({
                 'epoch'                : epoch,
@@ -456,15 +369,15 @@ model_file        = os.path.join(output_dir, "model.pth")
 train_losses_file = os.path.join(output_dir, "train_losses.npy")
 test_losses_file  = os.path.join(output_dir, "test_losses.npy")
 training_file     = os.path.join(output_dir, "training_info.txt")
-checkpoint_file   = os.path.join(output_dir, "checkpoint.pth")  # temporary; deleted on clean completion
+checkpoint_file   = os.path.join(output_dir, "checkpoint.pth")          # temporary; deleted on clean completion
 
 
-num_epochs  = prm.get_int("Training", "Number of epochs")       # maximum number of epochs to train for
-lr          = prm.get_float("Training", "Learning rate")        # learning rate
-beta        = prm.get_float("Training", "Beta")                 # supervised loss weight; set to 0.0 to train with physics loss only
-patience    = prm.get_int("Training", "Patience")               # early stopping patience
-grid_update_interval   = prm.get_int("Training", "Grid update interval")   # refine KAN spline grids every this many epochs (0 = disable)
-checkpoint_interval    = prm.get_int("Training", "Checkpoint interval")    # save a checkpoint to disk every this many epochs (1 = every epoch, 0 = disable)
+num_epochs           = prm.get_int("Training", "Number of epochs")      # maximum number of epochs to train for
+lr                   = prm.get_float("Training", "Learning rate")       # learning rate
+beta                 = prm.get_float("Training", "Beta")                # supervised loss weight; set to 0.0 to train with physics loss only
+patience             = prm.get_int("Training", "Patience")              # early stopping patience
+grid_update_interval = prm.get_int("Training", "Grid update interval")  # refine KAN spline grids every this many epochs (0 = disable)
+checkpoint_interval  = prm.get_int("Training", "Checkpoint interval")   # save a checkpoint to disk every this many epochs (1 = every epoch, 0 = disable)
 
 # train the model and get training/test loss curves
 train_losses, test_losses = train(
@@ -495,15 +408,17 @@ with open(training_file, "w") as f:
     f.write("\nDataset information:\n")
     f.write(f"  Path: {path}\n")
     f.write(f"  {num_points} points {dim}D per curve, {num_knots} knots, degree {degree}\n")
-    f.write(f"  Number of samples: {len(dataset)}\n")
-    f.write(f"  Number of training samples: {len(train_set)}\n")
-    f.write(f"  Number of test samples: {len(test_set)}\n")
+    f.write(f"  Number of (total) samples:  {len(dataset):>7,d}\n")
+    f.write(f"  Number of training samples: {n_train:>7,d}\n")
+    f.write(f"  Number of test samples:     {n_test:>7,d}\n")
 
-    f.write("\nTraining configuration:\n")
+    f.write("\nModel hyperparameters:\n")
     f.write(f"  KAN width:          {width}\n")
     f.write(f"  KAN grid intervals: {grid_intervals}\n")
     f.write(f"  KAN spline order:   {spline_order}\n")
     f.write(f"  KAN grid update interval: {grid_update_interval}\n")
+        
+    f.write("\nTraining configuration:\n")
     f.write(f"  Batch size: {batch_size}\n")
     f.write(f"  Number of epochs: {num_epochs}\n")
     f.write(f"  Learning rate: {lr}\n")
@@ -513,8 +428,8 @@ with open(training_file, "w") as f:
     f.write("\nTraining information and final results:\n")
     f.write(f"  Training completed in {len(train_losses)} epochs.\n")
     f.write(f"  Final train loss: {train_losses[-1][0]:>.6f}\n")
-    f.write(f"  Final test loss: {test_losses[-1][0]:>.6f}\n")
-    f.write(f"  Best test loss: {min(test_losses, key=lambda x: x[0])[0]:>.6f}\n")
+    f.write(f"  Final test loss:  {test_losses[-1][0]:>.6f}\n")
+    f.write(f"  Best test loss:   {min(test_losses, key=lambda x: x[0])[0]:>.6f}\n")
 
 
 # plot training and test loss curves
@@ -524,17 +439,5 @@ plot_train_losses(test_losses,  log=True,
                   path=output_dir, name="test_losses.png")
 
 # combined plot: train vs test mean loss
-import matplotlib.pyplot as plt
-epochs = np.arange(len(train_losses))
-fig, ax = plt.subplots(figsize=(8, 4))
-ax.plot(epochs, np.array(train_losses)[:, 0], label="Train mean", color="steelblue", linewidth=2)
-ax.plot(epochs, np.array(test_losses)[:, 0],  label="Test mean",  color="tomato",    linewidth=2)
-ax.set_xlabel("Epoch")
-ax.set_yscale("log")
-ax.set_ylabel("Loss (log scale)")
-ax.set_title("Train vs Test Loss")
-ax.grid(True, which="both", linestyle="--", linewidth=0.5)
-ax.legend()
-fig.tight_layout()
-fig.savefig(os.path.join(output_dir, "train_vs_test_losses.png"))
-plt.close(fig)
+plot_train_and_test_losses(train_losses, test_losses, log=True,
+                           path=output_dir, name="train_vs_test_losses.png")

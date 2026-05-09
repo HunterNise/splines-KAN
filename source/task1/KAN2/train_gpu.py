@@ -100,41 +100,6 @@ eps = torch.finfo(precision).eps    # machine epsilon, used as early-stopping to
 
 # Parse parameter file (identical to train.py)
 
-class PrmParser:
-    """Simple parser for deal.II-style .prm parameter files.
-    Supports subsection/end blocks, set Key = Value entries, and # comments.
-    """
-    def __init__(self):
-        self._data  = {}
-        self._stack = []
-
-    def parse(self, path):
-        with open(path) as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                if line.lower().startswith('subsection '):
-                    self._stack.append(line[len('subsection '):].strip())
-                elif line.lower() == 'end':
-                    self._stack.pop()
-                elif line.lower().startswith('set '):
-                    rest        = line[4:]
-                    key, _, val = rest.partition('=')
-                    full_key    = tuple(self._stack + [key.strip()])
-                    self._data[full_key] = val.strip()
-        return self
-
-    def get(self, *keys):
-        return self._data[tuple(keys)]
-
-    def get_int(self, *keys):
-        return int(self.get(*keys))
-
-    def get_float(self, *keys):
-        return float(self.get(*keys))
-
-
 prm_file = os.path.join(os.path.dirname(__file__), "train.prm")
 prm      = PrmParser().parse(prm_file)
 
@@ -181,6 +146,7 @@ def bspline_basis_matrix_batched(t_grid, knots_batch, degree):
     Returns
     -------
     Bprev : torch.Tensor (B, N, M)  where M = K - degree - 1.
+    
     """
     B_size = knots_batch.shape[0]
     N      = t_grid.shape[0]
@@ -272,6 +238,7 @@ def solve_control_points_batched(B_mat, X, eye_reg):
     Returns
     -------
     C : torch.Tensor (batch, M, d)  Control points (batched).
+    
     """
     Bt   = B_mat.transpose(1, 2)   # (batch, M, N)
     G    = Bt @ B_mat              # (batch, M, M)  — batched Gram matrix
@@ -283,7 +250,8 @@ def solve_control_points_batched(B_mat, X, eye_reg):
 # ==================================================
 
 class BSplineDataset:
-    """B-spline curve dataset with the entire data preloaded onto a device.
+    """
+    B-spline curve dataset with the entire data preloaded onto a device.
 
     Changes vs the original Dataset in train.py
     ---------------------------------------------
@@ -416,18 +384,19 @@ with open(summary_path, "w") as f:
     f.write("\nModel architecture:\n")
     f.write(str(model) + "\n\n")
 
-    f.write(f"\nInput dimension:  {num_points * dim} = {num_points} * {dim}  (flattened data points)")
-    f.write(f"\nOutput dimension: {num_intervals} (predicted intervals, softmax-normalized -> cumsum -> {num_knots} knots)")
-    f.write(f"\nB-spline degree:  {degree}")
-    f.write(f"\nKAN width:          {width}")
+    f.write(f"\nInput dimension:    {num_points * dim} = {num_points} * {dim}  (flattened data points)")
+    f.write(f"\nOutput dimension:   {num_intervals} (intervals without clamping)")
+    f.write(f"\nB-spline degree:    {degree}")
+    
+    f.write(f"\n\nKAN width:        {width}")
     f.write(f"\nKAN grid intervals: {grid_intervals}")
     f.write(f"\nKAN spline order:   {spline_order}")
 
     total     = sum(param.numel() for param in model.parameters())
     trainable = sum(param.numel() for param in model.parameters() if param.requires_grad)
-    f.write(f"\n\nTotal parameters:     {total:>,.0f}")
-    f.write(f"\nTrainable parameters: {trainable:>,.0f}")
-    f.write(f"\nFrozen parameters:    {total - trainable:>,.0f}")
+    f.write(f"\n\nTotal parameters:   {total:>9,d}")
+    f.write(f"\nTrainable parameters: {trainable:>9,d}")
+    f.write(f"\nFrozen parameters:    {total - trainable:>9,d}")
 
 # --------------------------------------------------
 
@@ -449,7 +418,8 @@ _eye_reg = torch.eye(_n_ctrl, dtype=precision, device=device).unsqueeze(0) * 1e-
 
 
 def build_full_knots_batched(pred_knots):
-    """Pad a batch of predicted knot vectors to full clamped form.
+    """
+    Pad a batch of predicted knot vectors to full clamped form.
 
     Takes the (B, num_knots) knot tensor and wraps the interior knots
     pred_knots[:, 1:-1] with (degree+1) exact zeros and ones to produce the full
@@ -463,6 +433,7 @@ def build_full_knots_batched(pred_knots):
     Returns
     -------
     full_knots : torch.Tensor (B, num_knots + 2 * degree)
+    
     """
     B = pred_knots.shape[0]
     return torch.cat([
@@ -473,7 +444,8 @@ def build_full_knots_batched(pred_knots):
 
 
 def kan_forward_to_knots(model, pts_batch):
-    """Run the KAN forward pass and convert its output to knots in [0, 1].
+    """
+    Run the KAN forward pass and convert its output to knots in [0, 1].
 
     The KAN outputs raw (unbounded) interval logits; this function applies softmax
     to make them positive and summing to 1, then cumsum to get monotone knots.
@@ -485,6 +457,7 @@ def kan_forward_to_knots(model, pts_batch):
     Returns
     -------
     pred_knots : torch.Tensor (B, num_knots)
+    
     """
     pred_intervals_raw = model(pts_batch)                                   # (B, num_intervals)
     pred_intervals     = F.softmax(pred_intervals_raw, dim=1)               # (B, num_intervals)
@@ -497,7 +470,8 @@ def kan_forward_to_knots(model, pts_batch):
 # --------------------------------------------------
 
 def compute_epoch_loss(model, pts_tensor, knots_tensor, batch_size, beta):
-    """Evaluate mean/max/min/std batch losses over a data split without gradient updates.
+    """
+    Evaluate mean/max/min/std batch losses over a data split without gradient updates.
 
     Changes vs train.py
     --------------------
@@ -506,6 +480,7 @@ def compute_epoch_loss(model, pts_tensor, knots_tensor, batch_size, beta):
     - Data is already on device; no .to(device) calls are needed.
     - Physics loss aggregated with a single torch.sum over the (B, N, d) residual
       tensor instead of accumulated with += inside a Python loop.
+    
     """
     batch_losses = []
     model.eval()
@@ -539,7 +514,8 @@ def compute_epoch_loss(model, pts_tensor, knots_tensor, batch_size, beta):
 def train(model, train_pts, train_knots, test_pts, test_knots,
           num_epochs=100, tol=1e-6, lr=1e-3, beta=0.0, patience=10, grid_update_interval=10,
           checkpoint_file=None, checkpoint_interval=5):
-    """Train the KAN model using fully batched GPU-friendly operations.
+    """
+    Train the KAN model using fully batched GPU-friendly operations.
 
     Changes vs train.py
     --------------------
@@ -554,6 +530,7 @@ def train(model, train_pts, train_knots, test_pts, test_knots,
       update_grid_from_samples() handles activation collection internally.
     - Physics loss aggregated with a single torch.sum over the full (B, N, d) residual.
     - Pre-allocated _zeros_pad, _ones_pad, and _eye_reg buffers reused across all epochs.
+    
     """
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -734,15 +711,14 @@ with open(training_file, "w") as f:
     f.write("\nDataset information:\n")
     f.write(f"  Path: {path}\n")
     f.write(f"  {num_points} points {dim}D per curve, {num_knots} knots, degree {degree}\n")
-    f.write(f"  Number of samples: {len(dataset)}\n")
-    f.write(f"  Number of training samples: {n_train}\n")
-    f.write(f"  Number of test samples: {n_test}\n")
+    f.write(f"  Number of (total) samples:  {len(dataset):>7,d}\n")
+    f.write(f"  Number of training samples: {n_train:>7,d}\n")
+    f.write(f"  Number of test samples:     {n_test:>7,d}\n")
 
-    f.write("\nTraining configuration:\n")
-    f.write(f"  KAN width:          {width}\n")
-    f.write(f"  KAN grid intervals: {grid_intervals}\n")
-    f.write(f"  KAN spline order:   {spline_order}\n")
+    f.write("\nModel hyperparameters:\n")
     f.write(f"  KAN grid update interval: {grid_update_interval}\n")
+    
+    f.write("\nTraining configuration:\n")
     f.write(f"  Batch size: {batch_size}\n")
     f.write(f"  Number of epochs: {num_epochs}\n")
     f.write(f"  Learning rate: {lr}\n")
@@ -752,25 +728,12 @@ with open(training_file, "w") as f:
     f.write("\nTraining information and final results:\n")
     f.write(f"  Training completed in {len(train_losses)} epochs.\n")
     f.write(f"  Final train loss: {train_losses[-1][0]:>.6f}\n")
-    f.write(f"  Final test loss: {test_losses[-1][0]:>.6f}\n")
-    f.write(f"  Best test loss: {min(test_losses, key=lambda x: x[0])[0]:>.6f}\n")
+    f.write(f"  Final test loss:  {test_losses[-1][0]:>.6f}\n")
+    f.write(f"  Best test loss:   {min(test_losses, key=lambda x: x[0])[0]:>.6f}\n")
 
 
 # Plot training and test loss curves (identical to train.py)
 plot_train_losses(train_losses, log=True, path=output_dir, name="train_losses.png")
 plot_train_losses(test_losses,  log=True, path=output_dir, name="test_losses.png")
-
-import matplotlib.pyplot as plt
-epochs = np.arange(len(train_losses))
-fig, ax = plt.subplots(figsize=(8, 4))
-ax.plot(epochs, np.array(train_losses)[:, 0], label="Train mean", color="steelblue", linewidth=2)
-ax.plot(epochs, np.array(test_losses)[:, 0],  label="Test mean",  color="tomato",    linewidth=2)
-ax.set_xlabel("Epoch")
-ax.set_yscale("log")
-ax.set_ylabel("Loss (log scale)")
-ax.set_title("Train vs Test Loss")
-ax.grid(True, which="both", linestyle="--", linewidth=0.5)
-ax.legend()
-fig.tight_layout()
-fig.savefig(os.path.join(output_dir, "train_vs_test_losses.png"))
-plt.close(fig)
+plot_train_and_test_losses(train_losses, test_losses, log=True,
+                           path=output_dir, name="train_vs_test_losses.png")
