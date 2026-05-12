@@ -16,11 +16,11 @@ end
 
 subsection Model
   # Hidden layer widths, comma-separated; input and output dims are derived automatically
-  set Hidden layers   = 30
+  set Hidden layers    = 30
   # Number of grid intervals per spline activation function
-  set Grid intervals  = 5
+  set Grid intervals   = 5
   # Spline order for KAN edge activations (3 = cubic)
-  set Spline order    = 3
+  set Spline order     = 3
 end
 
 subsection Training

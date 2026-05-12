@@ -76,14 +76,15 @@ shutil.copy2(prm_file, os.path.join(output_dir, "train.prm"))
 
 # Load dataset
 
-path        = os.path.join(ROOT, prm.get("Dataset", "Path"))    # path to the training dataset; prepend ROOT to get absolute path
+path        = prm.get("Dataset", "Path")                    # path to the training dataset
+full_path   = os.path.join(ROOT, path)                      # prepend ROOT to get absolute path
 
 num_knots   = prm.get_int("Dataset", "Number of knots")     # number of knots (without repetitions/clamping)
 num_points  = prm.get_int("Dataset", "Number of points")    # number of data points sampled from the B-spline curve
 
 
 print("Loading dataset ...")
-dataset = BSplineDataset(path, num_knots, num_points)
+dataset = BSplineDataset(full_path, num_knots, num_points)
 degree  = dataset.degree        # degree of the B-spline curve
 dim     = dataset.dim           # dimension of the data points (2 for 2D, 3 for 3D)
 
@@ -156,17 +157,17 @@ with open(summary_path, "w") as f:
     f.write("\nModel architecture:\n")
     f.write(str(model) + "\n\n")
 
-    f.write(f"\nInput dimension:    {num_points * dim} = {num_points} * {dim}  (flattened data points)")
-    f.write(f"\nOutput dimension:   {num_intervals} (intervals without clamping)")
-    f.write(f"\nB-spline degree:    {degree}")
+    f.write(f"\nInput dimension:  {num_points * dim} = {num_points} * {dim}  (flattened data points)")
+    f.write(f"\nOutput dimension: {num_intervals} (intervals without clamping)")
+    f.write(f"\nB-spline degree:  {degree}\n")
     
-    f.write(f"\n\nKAN width:        {width}")
+    f.write(f"\nKAN width:          {width}")
     f.write(f"\nKAN grid intervals: {grid_intervals}")
-    f.write(f"\nKAN spline order:   {spline_order}")
+    f.write(f"\nKAN spline order:   {spline_order}\n")
 
     total     = sum(param.numel() for param in model.parameters())
     trainable = sum(param.numel() for param in model.parameters() if param.requires_grad)
-    f.write(f"\n\nTotal parameters:   {total:>9,d}")
+    f.write(f"\nTotal parameters:     {total:>9,d}")
     f.write(f"\nTrainable parameters: {trainable:>9,d}")
     f.write(f"\nFrozen parameters:    {total - trainable:>9,d}")
 
@@ -413,9 +414,6 @@ with open(training_file, "w") as f:
     f.write(f"  Number of test samples:     {n_test:>7,d}\n")
 
     f.write("\nModel hyperparameters:\n")
-    f.write(f"  KAN width:          {width}\n")
-    f.write(f"  KAN grid intervals: {grid_intervals}\n")
-    f.write(f"  KAN spline order:   {spline_order}\n")
     f.write(f"  KAN grid update interval: {grid_update_interval}\n")
         
     f.write("\nTraining configuration:\n")

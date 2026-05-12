@@ -90,7 +90,8 @@ shutil.copy2(arch_file, os.path.join(output_dir, "model.py"))
 
 # --------------------------------------------------
 
-path       = os.path.join(ROOT, prm.get("Dataset", "Path"))
+path       = prm.get("Dataset", "Path")
+full_path  = os.path.join(ROOT, path)
 num_knots  = prm.get_int("Dataset", "Number of knots")
 num_points = prm.get_int("Dataset", "Number of points")
 
@@ -308,7 +309,7 @@ class BSplineDataset:
 
 
 print("Loading dataset ...")
-dataset = BSplineDataset(path, num_knots, num_points, device=device)
+dataset = BSplineDataset(full_path, num_knots, num_points, device=device)
 degree  = dataset.degree
 dim     = dataset.dim
 

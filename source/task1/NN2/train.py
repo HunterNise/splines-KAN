@@ -75,14 +75,15 @@ shutil.copy2(arch_file, os.path.join(output_dir, "model.py"))
 
 # Load points from text file
 
-path        = os.path.join(ROOT, prm.get("Dataset", "Path"))    # path to the training dataset; prepend ROOT to get absolute path
+path        = prm.get("Dataset", "Path")                    # path to the training dataset
+full_path   = os.path.join(ROOT, path)                      # prepend ROOT to get absolute path
 
 num_knots   = prm.get_int("Dataset", "Number of knots")     # number of knots (without repetitions/clamping)
 num_points  = prm.get_int("Dataset", "Number of points")    # number of data points sampled from the B-spline curve
 
 
 print("Loading dataset ...")
-dataset = BSplineDataset(path, num_knots, num_points)
+dataset = BSplineDataset(full_path, num_knots, num_points)
 degree  = dataset.degree        # degree of the B-spline curve
 dim     = dataset.dim           # dimension of the data points (2 for 2D, 3 for 3D)
 

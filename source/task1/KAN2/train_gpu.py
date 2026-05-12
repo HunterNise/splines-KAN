@@ -108,7 +108,8 @@ shutil.copy2(prm_file, os.path.join(output_dir, "train.prm"))
 
 # --------------------------------------------------
 
-path       = os.path.join(ROOT, prm.get("Dataset", "Path"))
+path       = prm.get("Dataset", "Path")
+full_path  = os.path.join(ROOT, path)
 num_knots  = prm.get_int("Dataset", "Number of knots")
 num_points = prm.get_int("Dataset", "Number of points")
 
@@ -325,7 +326,7 @@ class BSplineDataset:
 
 
 print("Loading dataset ...")
-dataset = BSplineDataset(path, num_knots, num_points, device=device)
+dataset = BSplineDataset(full_path, num_knots, num_points, device=device)
 degree  = dataset.degree
 dim     = dataset.dim
 
@@ -384,17 +385,17 @@ with open(summary_path, "w") as f:
     f.write("\nModel architecture:\n")
     f.write(str(model) + "\n\n")
 
-    f.write(f"\nInput dimension:    {num_points * dim} = {num_points} * {dim}  (flattened data points)")
-    f.write(f"\nOutput dimension:   {num_intervals} (intervals without clamping)")
-    f.write(f"\nB-spline degree:    {degree}")
+    f.write(f"\nInput dimension:  {num_points * dim} = {num_points} * {dim}  (flattened data points)")
+    f.write(f"\nOutput dimension: {num_intervals} (intervals without clamping)")
+    f.write(f"\nB-spline degree:  {degree}\n")
     
-    f.write(f"\n\nKAN width:        {width}")
+    f.write(f"\nKAN width:          {width}")
     f.write(f"\nKAN grid intervals: {grid_intervals}")
-    f.write(f"\nKAN spline order:   {spline_order}")
+    f.write(f"\nKAN spline order:   {spline_order}\n")
 
     total     = sum(param.numel() for param in model.parameters())
     trainable = sum(param.numel() for param in model.parameters() if param.requires_grad)
-    f.write(f"\n\nTotal parameters:   {total:>9,d}")
+    f.write(f"\nTotal parameters:     {total:>9,d}")
     f.write(f"\nTrainable parameters: {trainable:>9,d}")
     f.write(f"\nFrozen parameters:    {total - trainable:>9,d}")
 

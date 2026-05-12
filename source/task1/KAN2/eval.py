@@ -23,8 +23,6 @@ from source.functions import *
 
 import os
 
-from tqdm import tqdm
-
 
 # Set seed for reproducibility
 torch.manual_seed(0)
@@ -60,41 +58,6 @@ eps = torch.finfo(precision).eps    # machine epsilon for the chosen precision, 
 # --------------------------------------------------
 
 # Load parameter file from the output folder
-
-class PrmParser:
-    """Simple parser for deal.II-style .prm parameter files.
-    Supports subsection/end blocks, set Key = Value entries, and # comments.
-    """
-    def __init__(self):
-        self._data  = {}
-        self._stack = []
-
-    def parse(self, path):
-        with open(path) as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                if line.lower().startswith('subsection '):
-                    self._stack.append(line[len('subsection '):].strip())
-                elif line.lower() == 'end':
-                    self._stack.pop()
-                elif line.lower().startswith('set '):
-                    rest        = line[4:]
-                    key, _, val = rest.partition('=')
-                    full_key    = tuple(self._stack + [key.strip()])
-                    self._data[full_key] = val.strip()
-        return self
-
-    def get(self, *keys):
-        return self._data[tuple(keys)]
-
-    def get_int(self, *keys):
-        return int(self.get(*keys))
-
-    def get_float(self, *keys):
-        return float(self.get(*keys))
-
 
 prm_file = os.path.join(output_dir, "train.prm")
 if not os.path.exists(prm_file):
@@ -135,70 +98,18 @@ model.eval()
 
 # --------------------------------------------------
 
+eval_dir = os.path.join(output_dir, "eval")
+os.makedirs(eval_dir, exist_ok=True)
+
 # evaluate on selected samples from both the training and test sets
 modes = ("train", "eval")
 for mode in modes:
 
-    method = "uniform"  # method to compute parameter values corresponding to data points
-
+    # Load points from text file
+    
     # derive mode-specific dataset path from the training path stored in the parameter file
     dataset_dir = os.path.dirname(prm.get("Dataset", "Path"))
     path = os.path.join(ROOT, dataset_dir, f"2d_{mode}.npz")   # prepend ROOT since the prm stores a relative path
-
-    class BSplineDataset(Dataset):
-        def __init__(self, path, num_knots, num_points=100):
-            self.samples = []
-            self.num_knots = num_knots
-            self.num_points = num_points
-
-            with np.load(path) as data:
-                ctrl_pts    = data['ctrl_pts']
-                knots       = data['knots']
-                degree      = data['degree']
-
-            self.degree = int(degree)
-            self.dim = ctrl_pts.shape[2]
-
-            
-            # filter curves whose knot count matches num_knots
-            
-            d = self.degree
-            # formula derived from the padded representation: count_nonzero counts
-            # the (num_knots-2) interior knots plus (d+1) trailing ones
-            knot_count = np.count_nonzero(knots, axis=1) + (d + 1) - 2 * d
-            mask = knot_count == num_knots      # bool (N_ds,)
-
-            ctrl_pts = ctrl_pts[mask]           # (N, max_ctrl, dim)
-            knots    = knots[mask]              # (N, max_knots_padded)
-
-            # actual (unpadded) sizes for this num_knots
-            full_knot_len   = num_knots + 2 * d         # full clamped knot vector length
-            n_ctrl          = num_knots + d - 1         # number of control points
-
-            
-            # resample curves at num_points uniform parameter values in [0, 1]
-            
-            t_grid = torch.linspace(0.0, 1.0, num_points, dtype=torch.float64)
-
-            for i in range(len(ctrl_pts)):
-                full_knots  = torch.tensor(knots[i, :full_knot_len], dtype=torch.float64)
-                ctrls       = torch.tensor(ctrl_pts[i, :n_ctrl],     dtype=torch.float64)   # (n_ctrl, dim)
-
-                # evaluate B-spline at num_points uniform parameter values
-                B   = bspline_basis_matrix(t_grid, full_knots, d, soft=False)    # (num_points, n_ctrl)
-                pts = B @ ctrls                                                   # (num_points, dim)
-
-                # interior knots as labels (exclude the d+1 leading zeros and d+1 trailing ones)
-                interior_knots = full_knots[d + 1 : -(d + 1)]   # (num_knots - 2,)
-
-                self.samples.append((pts.reshape(-1), interior_knots))
-
-        def __len__(self):
-            return len(self.samples)
-
-        def __getitem__(self, idx):
-            return self.samples[idx]
-
 
     dataset = BSplineDataset(path, num_knots, num_points)
 
@@ -208,15 +119,11 @@ for mode in modes:
 
     # Evaluation loop: run inference, compute fitting error, save results and plots.
 
-    eval_dir = os.path.join(output_dir, "eval")
-    os.makedirs(eval_dir, exist_ok=True)
-
-    for i, (pts_flat, label) in enumerate(loader):
+    for i, (pts_flat, label, params) in enumerate(loader):
         pts_flat = pts_flat.to(device).squeeze(0)       # (num_points*dim,)
+        points   = pts_flat.reshape(num_points, dim)    # (num_points, dim)
         label    = label.to(device).squeeze(0)          # (num_interior,)
-
-        points = pts_flat.reshape(num_points, dim)
-        t_grid = make_grid(points, method=method)
+        t_grid   = params.to(device).squeeze(0)         # (num_points,)
 
         with torch.no_grad():
             # KAN forward pass: (1, num_points*dim) -> (1, num_intervals)
@@ -239,6 +146,7 @@ for mode in modes:
 
         full_knots = full_knots.cpu().numpy()
         controls   = controls.cpu().numpy()
+
 
         print(f"\n{mode} sample {i}:")
         print(f"  Error: {err:.16f}")
