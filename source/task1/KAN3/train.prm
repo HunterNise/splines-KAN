@@ -1,0 +1,52 @@
+# Training configuration for the KAN3 B-spline knot prediction model.
+# Parameter file following the deal.II .prm convention:
+#   subsection <Name>
+#     set <Key> = <Value>
+#   end
+
+
+subsection Dataset
+  # Path to the training dataset (.npz file)
+  set Path             = data/SplinegenDataset/2d_train.npz
+  # Number of knots (without repetitions/clamping)
+  set Number of knots  = 6
+  # Number of data points sampled from each B-spline curve
+  set Number of points = 100
+end
+
+subsection Model
+  # Hidden layer widths of the shared window KAN, comma-separated.
+  # Input and output dims are derived automatically:
+  #   input  = Window size * data dimension
+  #   output = 1 (scalar knot-density score per window)
+  set Hidden layers        = 16
+  # Number of grid intervals per spline activation function
+  set Grid intervals       = 5
+  # Spline order for KAN edge activations (3 = cubic)
+  set Spline order         = 3
+  # Number of consecutive curve points fed to the KAN at each sliding step
+  set Window size          = 5
+  # Step between consecutive windows along the point sequence (>= 1)
+  set Stride               = 1
+  # Gaussian kernel width for soft-histogram aggregation, expressed as a multiple of
+  # one bin width (sigma = bandwidth / n_intervals).  Larger values spread each window's
+  # vote across more knot-interval bins.
+  set Histogram bandwidth  = 0.8
+end
+
+subsection Training
+  # Number of samples processed per gradient update
+  set Batch size       = 32
+  # Maximum number of training epochs
+  set Number of epochs = 300
+  # Learning rate for the Adam optimizer
+  set Learning rate    = 1e-3
+  # Weight of the supervised (MSE) knot loss relative to the physics loss; set to 0.0 for physics loss only
+  set Beta             = 0.1
+  # Number of epochs without improvement before triggering early stopping
+  set Patience         = 15
+  # Refine KAN spline grids from observed activations every this many epochs (0 = disable)
+  set Grid update interval = 5
+  # Save a checkpoint to disk every this many epochs (1 = every epoch, 0 = disable)
+  set Checkpoint interval  = 10
+end
