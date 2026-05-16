@@ -22,13 +22,17 @@ Architecture changes vs KAN2/train_gpu.py
      pts (B, num_points*dim)
        → 3-D reshape (B, num_points, dim)
        → unfold along points dim → (B, N_w, window_size, dim)
-       → per-window centroid subtraction (translation invariance)
-       → global-scale division by curve bounding-box size (scale invariance,
-          preserves relative local arc-length between windows)
-       → flatten → (B*N_w, window_size*dim)   ← KAN input
+       → scale-normalised chord vectors: d_i = (p_{i+1} - p_i) / global_scale
+       → intrinsic features per window:
+            (window_size-1) chord lengths  l_i = ||d_i||
+            (window_size-2) turning angles θ_i = atan2(d_i × d_{i+1}, d_i · d_{i+1})
+       → flatten → (B*N_w, n_features)   ← KAN input
+         where n_features = 2*window_size - 3
+     Features are translation-, scale-, and rotation-invariant, so the KAN formula
+     operates purely on geometry independent of curve position or orientation.
 
 2. Shared KAN forward:
-     (B*N_w, window_size*dim) → KAN → (B*N_w, 1)
+     (B*N_w, n_features) → KAN → (B*N_w, 1)
        → reshape → scores (B, N_w)            ← scalar score per window
 
 3. Soft-histogram aggregation (hist_weights, pre-computed once):
@@ -42,14 +46,23 @@ Architecture changes vs KAN2/train_gpu.py
      softmax(bin_scores) → pred_intervals
      cumsum([0, pred_intervals]) → pred_knots ∈ [0, 1]^{num_knots}
 
-KAN model width: [window_size*dim, *hidden_layers, 1]
-  — much smaller than KAN2's [num_points*dim, *hidden_layers, num_intervals].
+KAN model width: [n_features, *hidden_layers, 1]
+  where n_features = 2*window_size - 3 (rotation-invariant intrinsic features).
+  Much smaller and more interpretable than KAN2's [num_points*dim, *hidden_layers, num_intervals].
 
-New parameters (in train.prm under Model)
-------------------------------------------
+New parameters (in train.prm)
+------------------------------
+Model section:
 - Window size:         w — number of consecutive points per window.
 - Stride:              step between consecutive windows (≥ 1).
 - Histogram bandwidth: σ̃ — Gaussian width as a multiple of one bin width (σ = σ̃/n_intervals).
+
+Training section:
+- Weight decay:   L2 regularisation for Adam; prevents near-singular spline activations
+                  and produces cleaner symbolic formulas.
+- Beta decay:     multiplicative factor applied to beta after each epoch
+                  (current_beta *= beta_decay).  Start beta high to escape the
+                  uniform-knot plateau, then decay toward pure physics training.
 
 Constraint: N_w = (num_points - window_size) // stride + 1  must be ≥ n_intervals.
 
@@ -68,7 +81,7 @@ Compatibility
 -------------
 The saved model.pth format includes all fields needed to reconstruct the model at eval time:
   model_state_dict, num_points, dim, num_knots, width, grid_intervals, spline_order,
-  degree, window_size, stride, histogram_bandwidth.
+  degree, window_size, stride, histogram_bandwidth, n_features.
 An updated eval.py for KAN3 must use extract_windows + hist_weights aggregation instead of
 the direct KAN forward pass used in KAN2/eval.py.
 """
@@ -135,6 +148,12 @@ num_points = prm.get_int("Dataset", "Number of points")
 window_size         = prm.get_int("Model", "Window size")
 stride              = prm.get_int("Model", "Stride")
 histogram_bandwidth = prm.get_float("Model", "Histogram bandwidth")
+
+# Number of rotation-invariant intrinsic features per window:
+#   (window_size - 1) chord lengths + (window_size - 2) turning angles = 2*window_size - 3.
+# Replaces raw window_size*dim flattened coordinates; makes the KAN input (and its
+# symbolic formula) invariant to translation, scale, AND rotation of the curve.
+n_features = 2 * window_size - 3
 
 
 # ==================================================
@@ -343,8 +362,8 @@ hidden_layers  = [int(x) for x in prm.get("Model", "Hidden layers").split(",")]
 grid_intervals = prm.get_int("Model", "Grid intervals")
 spline_order   = prm.get_int("Model", "Spline order")
 
-# Full width list: input = window_size*dim, output = 1 (scalar score)
-width = [window_size * dim] + hidden_layers + [1]
+# Full width list: input = n_features (rotation-invariant intrinsic features), output = 1
+width = [n_features] + hidden_layers + [1]
 
 model = KAN(
     width     = width,
@@ -366,7 +385,7 @@ with open(summary_path, "w") as f:
     f.write("\nModel architecture (shared sliding-window KAN):\n")
     f.write(str(model) + "\n\n")
 
-    f.write(f"\nInput dimension:  {window_size * dim} = {window_size} points * {dim}D  (per window, normalised)")
+    f.write(f"\nInput dimension:  {n_features} = ({window_size}-1) chord lengths + ({window_size}-2) turning angles  (per window, intrinsic)")
     f.write(f"\nOutput dimension: 1 (scalar knot-density score per window)")
     f.write(f"\nB-spline degree:  {degree}\n")
 
@@ -397,21 +416,28 @@ _eye_reg = torch.eye(_n_ctrl, dtype=precision, device=device).unsqueeze(0) * 1e-
 
 def extract_windows(pts_batch):
     """
-    Extract normalised sliding windows from a batch of curves.
+    Extract rotation-invariant intrinsic features from sliding windows of a batch of curves.
 
-    Steps
-    -----
-    1. Reshape (B, num_points*dim) → (B, num_points, dim).
-    2. Unfold along the points dimension with (window_size, stride) to get
-       (B, N_w, window_size, dim).
-    3. Subtract the per-window centroid to achieve translation invariance.
-    4. Divide by the global bounding-box scale of each curve (largest side of the
-       axis-aligned bounding box of all num_points points).  This removes the overall
-       size of the curve while preserving the *relative* local arc-length between
-       windows — faster-moving windows remain proportionally larger than slow ones,
-       which is a useful curvature proxy.
-    5. Flatten and merge batch and window dimensions →
-       (B * N_w, window_size * dim)   ← ready for the KAN forward pass.
+    Each window of window_size consecutive points is converted to
+    n_features = 2*window_size - 3 intrinsic geometric features:
+      - (window_size - 1) chord lengths:  l_i = ||p_{i+1} - p_i|| / global_scale
+      - (window_size - 2) turning angles: θ_i = atan2(d_i × d_{i+1}, d_i · d_{i+1})
+    where d_i = (p_{i+1} - p_i) / global_scale is the i-th scale-normalised chord vector.
+
+    These features are:
+      - Translation invariant  (chord vectors are differences of points)
+      - Scale invariant        (chord lengths divided by global bounding-box size;
+                                turning angles are dimensionless)
+      - Rotation invariant     (chord lengths unchanged by rotation; turning angles
+                                are relative, depending only on the angle between chords)
+
+    Chord lengths preserve the relative local arc-length signal across windows
+    (fast-moving windows remain proportionally larger than slow ones, which is a
+    useful curvature proxy).  Turning angles capture discrete curvature, which drives
+    optimal knot placement via the equidistribution principle.
+
+    NOTE: the 2D signed cross product is used for turning angles in [-π, π].
+    This function assumes dim == 2.
 
     Parameters
     ----------
@@ -419,26 +445,47 @@ def extract_windows(pts_batch):
 
     Returns
     -------
-    torch.Tensor (B * N_w, window_size * dim)
+    torch.Tensor (B * N_w, n_features)   where n_features = 2 * window_size - 3
     """
-    B = pts_batch.shape[0]
+    B      = pts_batch.shape[0]
     pts_3d = pts_batch.view(B, num_points, dim)   # (B, num_points, dim)
 
-    # unfold(dimension, size, step) adds a trailing dimension of length `size`.
-    windows = pts_3d.unfold(1, window_size, stride)   # (B, N_w, dim, window_size)
-    windows = windows.permute(0, 1, 3, 2).contiguous()  # (B, N_w, window_size, dim)
-
-    # Per-window centroid subtraction (translation invariance)
-    centroid = windows.mean(dim=2, keepdim=True)   # (B, N_w, 1, dim)
-    windows  = windows - centroid
-
     # Global scale: largest side of the curve's bounding box, one scalar per curve.
-    # Using the global (not per-window) scale preserves the relative speed signal.
+    # Using the global (not per-window) scale preserves the relative arc-length signal.
     bb_range     = pts_3d.max(dim=1).values - pts_3d.min(dim=1).values   # (B, dim)
     global_scale = bb_range.max(dim=1).values.clamp(min=1e-8)            # (B,)
-    windows      = windows / global_scale.view(B, 1, 1, 1)
 
-    return windows.reshape(B * N_w, window_size * dim)   # (B*N_w, window_size*dim)
+    # Unfold along the points dimension to extract overlapping windows.
+    # unfold(dim, size, step): (B, num_points, dim) → (B, N_w, dim, window_size)
+    # Permute to (B, N_w, window_size, dim) for convenient per-window indexing.
+    windows = pts_3d.unfold(1, window_size, stride)          # (B, N_w, dim, window_size)
+    windows = windows.permute(0, 1, 3, 2).contiguous()       # (B, N_w, window_size, dim)
+
+    # Scale-normalised chord vectors: d_i = (p_{i+1} - p_i) / global_scale
+    chords = windows[:, :, 1:, :] - windows[:, :, :-1, :]   # (B, N_w, window_size-1, dim)
+    chords = chords / global_scale.view(B, 1, 1, 1)
+
+    # Chord lengths — (window_size - 1) per window
+    chord_lengths = chords.norm(dim=-1)   # (B, N_w, window_size-1)
+
+    # Turning angles between consecutive chord pairs — (window_size - 2) per window.
+    # Normalise chord directions before atan2 for numerical stability near zero-length
+    # chords (which can arise from coincident sampled points).
+    d_cur  = chords[:, :, :-1, :]   # (B, N_w, window_size-2, dim)
+    d_next = chords[:, :,  1:, :]   # (B, N_w, window_size-2, dim)
+
+    d_cur_n  = d_cur  / d_cur.norm( dim=-1, keepdim=True).clamp(min=1e-8)
+    d_next_n = d_next / d_next.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+
+    # 2D signed cross product: d_i × d_{i+1} = dx_i*dy_{i+1} - dy_i*dx_{i+1}
+    cross  = d_cur_n[..., 0] * d_next_n[..., 1] - d_cur_n[..., 1] * d_next_n[..., 0]  # (B, N_w, w-2)
+    dot    = (d_cur_n * d_next_n).sum(dim=-1)                                            # (B, N_w, w-2)
+    angles = torch.atan2(cross, dot)   # (B, N_w, window_size-2), signed, in [-π, π]
+
+    # Concatenate: [chord_lengths | turning_angles] → (B, N_w, n_features)
+    features = torch.cat([chord_lengths, angles], dim=-1)   # (B, N_w, 2*window_size-3)
+
+    return features.reshape(B * N_w, n_features)   # (B*N_w, n_features)
 
 
 def build_full_knots_batched(pred_knots):
@@ -468,7 +515,7 @@ def kan_forward_to_knots(model, pts_batch):
     Pipeline
     --------
     pts_batch (B, num_points*dim)
-      → extract_windows → (B*N_w, window_size*dim)    [normalised local windows]
+      → extract_windows → (B*N_w, n_features)          [intrinsic geometric features]
       → shared KAN      → (B*N_w, 1)                  [scalar score per window]
       → reshape         → scores (B, N_w)
       → @ hist_weights  → bin_scores (B, n_intervals)  [soft histogram aggregation]
@@ -529,7 +576,9 @@ def compute_epoch_loss(model, pts_tensor, knots_tensor, batch_size, beta):
 
 
 def train(model, train_pts, train_knots, test_pts, test_knots,
-          num_epochs=100, tol=1e-6, lr=1e-3, beta=0.0, patience=10, grid_update_interval=10,
+          num_epochs=100, tol=1e-6, lr=1e-3, weight_decay=0.0,
+          lr_factor=0.5, lr_patience=10,
+          beta=0.0, beta_decay=1.0, patience=10, grid_update_interval=10,
           checkpoint_file=None, checkpoint_interval=5):
     """
     Train the sliding-window KAN using fully batched GPU-friendly operations.
@@ -539,15 +588,20 @@ def train(model, train_pts, train_knots, test_pts, test_knots,
     - kan_forward_to_knots now runs extract_windows internally, so the training loop
       passes raw pts_batch (B, num_points*dim) and receives pred_knots (B, num_knots)
       exactly as before — all sliding-window logic is encapsulated.
-    - Grid update: update_grid_from_samples receives the window-extracted KAN input
-      extract_windows(train_pts[:batch_size]) of shape (batch_size*N_w, window_size*dim)
-      instead of the raw flattened points.  No separate warm-up pass is needed.
+    - Grid update: update_grid_from_samples receives extract_windows output of shape
+      (batch_size*N_w, n_features) instead of raw flattened points.
+    - weight_decay: passed to Adam to regularise spline coefficients and prevent
+      near-singular activations; produces cleaner, more interpretable formulas.
+    - beta_decay: current_beta is multiplied by beta_decay at the end of each epoch.
+      Start with a large beta to bootstrap correct knot geometry, then decay toward
+      physics-only training.  The decayed value is stored in checkpoints so that
+      training resumes with the correct beta without recomputation.
     - All other conventions (checkpoint/resume, early stopping, ReduceLROnPlateau,
       batched basis+solve, pre-allocated buffers) are identical to KAN2/train_gpu.py.
     """
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="min", factor=0.7, patience=8)
+        optimizer, mode="min", factor=lr_factor, patience=lr_patience)
     train_losses = []
     test_losses  = []
 
@@ -555,6 +609,7 @@ def train(model, train_pts, train_knots, test_pts, test_knots,
     best_state       = None
     patience_counter = 0
     start_epoch      = 0
+    current_beta     = beta   # decayed each epoch; saved in / restored from checkpoints
 
     if checkpoint_file is not None and os.path.exists(checkpoint_file):
         print(f"Resuming from checkpoint '{checkpoint_file}' ...")
@@ -568,6 +623,7 @@ def train(model, train_pts, train_knots, test_pts, test_knots,
         best_state       = ckpt['best_state']
         patience_counter = ckpt['patience_counter']
         start_epoch      = ckpt['epoch'] + 1
+        current_beta     = ckpt.get('beta', beta)   # restore decayed beta for correct resume
         print(f"  Resumed at epoch {start_epoch} (best test mean so far: {best_test_mean:.6f})")
 
     n_train = len(train_pts)
@@ -577,7 +633,7 @@ def train(model, train_pts, train_knots, test_pts, test_knots,
         model.train()
 
         # Periodically refine the KAN spline grids from observed window activations.
-        # extract_windows produces the (batch_size*N_w, window_size*dim) tensor that
+        # extract_windows produces the (batch_size*N_w, n_features) tensor that
         # update_grid_from_samples expects as the KAN's actual input domain.
         if grid_update_interval > 0 and epoch > 0 and epoch % grid_update_interval == 0:
             model.update_grid_from_samples(extract_windows(train_pts[:batch_size]))
@@ -606,7 +662,7 @@ def train(model, train_pts, train_knots, test_pts, test_knots,
 
             supervised_loss = F.mse_loss(pred_knots[:, 1:-1], labels_batch)
 
-            loss = physics_loss + beta * supervised_loss
+            loss = physics_loss + current_beta * supervised_loss
             batch_losses.append(loss.item())
 
             loss.backward()
@@ -619,7 +675,7 @@ def train(model, train_pts, train_knots, test_pts, test_knots,
             np.min(batch_losses),  np.std(batch_losses)
         ))
 
-        test_batch_losses = compute_epoch_loss(model, test_pts, test_knots, batch_size, beta)
+        test_batch_losses = compute_epoch_loss(model, test_pts, test_knots, batch_size, current_beta)
         test_mean = np.mean(test_batch_losses)
         test_losses.append((
             test_mean, np.max(test_batch_losses),
@@ -630,7 +686,12 @@ def train(model, train_pts, train_knots, test_pts, test_knots,
         te = test_losses[-1]
         print(f"  train  mean={tr[0]:.6f}  max={tr[1]:.6f}  min={tr[2]:.6f}  std={tr[3]:.6f}")
         print(f"  test   mean={te[0]:.6f}  max={te[1]:.6f}  min={te[2]:.6f}  std={te[3]:.6f}")
+        print(f"  beta={current_beta:.6f}")
         print()
+
+        # Decay beta for the next epoch: starts high to bootstrap knot geometry,
+        # decays toward pure physics-loss training as the model matures.
+        current_beta *= beta_decay
 
         scheduler.step(test_mean)
 
@@ -655,6 +716,7 @@ def train(model, train_pts, train_knots, test_pts, test_knots,
                 'best_test_mean'       : best_test_mean,
                 'best_state'           : best_state,
                 'patience_counter'     : patience_counter,
+                'beta'                 : current_beta,   # decayed value for correct resume
             }, checkpoint_file)
 
     if best_state is not None:
@@ -676,14 +738,20 @@ checkpoint_file   = os.path.join(output_dir, "checkpoint.pth")
 
 num_epochs           = prm.get_int("Training", "Number of epochs")
 lr                   = prm.get_float("Training", "Learning rate")
+lr_factor            = prm.get_float("Training", "LR scheduler factor")
+lr_patience          = prm.get_int("Training", "LR scheduler patience")
+weight_decay         = prm.get_float("Training", "Weight decay")
 beta                 = prm.get_float("Training", "Beta")
+beta_decay           = prm.get_float("Training", "Beta decay")
 patience             = prm.get_int("Training", "Patience")
 grid_update_interval = prm.get_int("Training", "Grid update interval")
 checkpoint_interval  = prm.get_int("Training", "Checkpoint interval")
 
 train_losses, test_losses = train(
     model, train_pts, train_knots, test_pts, test_knots,
-    num_epochs=num_epochs, tol=eps, lr=lr, beta=beta, patience=patience,
+    num_epochs=num_epochs, tol=eps, lr=lr, weight_decay=weight_decay,
+    lr_factor=lr_factor, lr_patience=lr_patience,
+    beta=beta, beta_decay=beta_decay, patience=patience,
     grid_update_interval=grid_update_interval,
     checkpoint_file=checkpoint_file, checkpoint_interval=checkpoint_interval,
 )
@@ -704,6 +772,7 @@ torch.save({
     'window_size'        : window_size,
     'stride'             : stride,
     'histogram_bandwidth': histogram_bandwidth,
+    'n_features'         : n_features,
 }, model_file)
 
 np.save(train_losses_file, np.array(train_losses, dtype=np.float64))
@@ -724,6 +793,7 @@ with open(training_file, "w") as f:
     f.write(f"  Window size:             {window_size}\n")
     f.write(f"  Stride:                  {stride}\n")
     f.write(f"  Windows per curve (N_w): {N_w}\n")
+    f.write(f"  Intrinsic features:      {n_features} = ({window_size}-1) chord lengths + ({window_size}-2) turning angles\n")
     f.write(f"  Histogram bandwidth:     {histogram_bandwidth}  (sigma = {_sigma:.4f})\n")
     f.write(f"  Grid update interval:    {grid_update_interval}\n")
 
@@ -731,7 +801,10 @@ with open(training_file, "w") as f:
     f.write(f"  Batch size: {batch_size}\n")
     f.write(f"  Number of epochs: {num_epochs}\n")
     f.write(f"  Learning rate: {lr}\n")
-    f.write(f"  Beta (supervised loss weight): {beta}\n")
+    f.write(f"  LR scheduler: ReduceLROnPlateau(factor={lr_factor}, patience={lr_patience})\n")
+    f.write(f"  Weight decay: {weight_decay}\n")
+    f.write(f"  Beta (initial supervised loss weight): {beta}\n")
+    f.write(f"  Beta decay (per epoch): {beta_decay}\n")
     f.write(f"  Patience (early stopping): {patience} epochs\n")
 
     f.write("\nTraining information and final results:\n")

@@ -17,7 +17,8 @@ end
 subsection Model
   # Hidden layer widths of the shared window KAN, comma-separated.
   # Input and output dims are derived automatically:
-  #   input  = Window size * data dimension
+  #   input  = 2 * Window size - 3   (rotation-invariant intrinsic features:
+  #              (w-1) chord lengths + (w-2) turning angles between chords)
   #   output = 1 (scalar knot-density score per window)
   set Hidden layers        = 16
   # Number of grid intervals per spline activation function
@@ -41,8 +42,18 @@ subsection Training
   set Number of epochs = 300
   # Learning rate for the Adam optimizer
   set Learning rate    = 1e-3
+  # ReduceLROnPlateau: multiplicative factor applied to LR on plateau
+  set LR scheduler factor   = 0.7
+  # ReduceLROnPlateau: epochs with no test-loss improvement before reducing LR
+  set LR scheduler patience = 8
   # Weight of the supervised (MSE) knot loss relative to the physics loss; set to 0.0 for physics loss only
   set Beta             = 0.1
+  # Multiplicative decay applied to Beta after each epoch; set to 1.0 to disable.
+  # Start Beta high to escape the uniform-knot plateau, then decay toward pure physics loss.
+  set Beta decay       = 1.0
+  # L2 regularisation coefficient for Adam; prevents near-singular spline activations
+  # and produces cleaner, more interpretable symbolic formulas.
+  set Weight decay     = 1e-4 
   # Number of epochs without improvement before triggering early stopping
   set Patience         = 15
   # Refine KAN spline grids from observed activations every this many epochs (0 = disable)
