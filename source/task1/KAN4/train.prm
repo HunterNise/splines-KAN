@@ -1,0 +1,101 @@
+# Training configuration for the KAN4 B-spline knot prediction model.
+# Parameter file following the deal.II .prm convention:
+#   subsection <Name>
+#     set <Key> = <Value>
+#   end
+#
+# Changes vs KAN3/train.prm
+# --------------------------
+# - "Hidden layers" replaced by "Hidden sum nodes" + "Hidden mult nodes" + "Mult arity".
+#   The hidden layer now mixes addition nodes (standard KAN) with multiplication nodes
+#   that can directly express products of spline-transformed inputs (e.g. |θ| / (l·l')).
+# - "Histogram bandwidth" removed.  The soft-histogram aggregation is gone entirely.
+# - "Quantile sharpness" added.  Controls the concentration of the soft-argmin that
+#   maps the learned density CDF to interior knot positions.
+# - "Beta min" added.  Floor on the supervised loss weight after beta decay; prevents
+#   supervision from vanishing entirely (a pathology seen in KAN3 outputs-1/2).
+
+
+subsection Dataset
+  # Path to the training dataset (.npz file)
+  set Path             = data/SplinegenDataset/2d_train.npz
+  # Number of knots (without repetitions/clamping)
+  set Number of knots  = 6
+  # Number of data points sampled from each B-spline curve
+  set Number of points = 100
+end
+
+subsection Model
+  # Number of addition (sum) nodes in the single hidden layer.
+  # Addition nodes are standard KAN nodes: each computes a sum of learnable 1-D spline
+  # activations of its inputs.  4 nodes are sufficient to learn independent proxies for
+  # chord-length and turning-angle contributions to curvature.
+  set Hidden sum nodes  = 4
+
+  # Number of multiplication nodes in the single hidden layer.
+  # Each mult node computes the product of mult_arity learnable spline-transformed inputs.
+  # Two mult nodes let the KAN directly express products like |θ_i| * g(l_j), matching
+  # the discrete curvature formula κ ≈ |θ| / (l · l').
+  set Hidden mult nodes = 2
+
+  # Arity (number of inputs) for each multiplication node.
+  # mult_arity=2 gives pairwise products f(x_a) * g(x_b); this is the minimum needed
+  # for curvature-like expressions.  Increasing to 3 allows triple products at the cost
+  # of more edges (n_features * 3 extra edges per mult node).
+  set Mult arity        = 2
+
+  # Number of grid intervals per spline activation function.
+  # Reduced from KAN3's 5 to 3: the density proxy is a simple smooth function of
+  # geometric features, so a coarser spline grid is less likely to overfit or fragment.
+  set Grid intervals    = 3
+
+  # Spline order for KAN edge activations (3 = cubic)
+  set Spline order      = 3
+
+  # Number of consecutive curve points fed to the KAN at each sliding step.
+  # With window_size=5 and dim=2: n_features = 2*5-3 = 7
+  #   (4 chord lengths + 3 turning angles).
+  set Window size       = 5
+
+  # Step between consecutive windows along the point sequence (>= 1).
+  set Stride            = 1
+
+  # Sharpness of the soft-argmin used to extract each interior knot from the density CDF.
+  # At level α_j the interior knot is placed at the τ-weighted centroid of windows where
+  # CDF ≈ α_j, using softmax(-sharpness * |CDF_i - α_j|) as attention weights.
+  # Higher sharpness → the knot position is determined by fewer windows (harder argmin).
+  # Recommended range 10–30: too low smears each knot over the whole domain; too high
+  # causes vanishing gradients once the CDF becomes steep.
+  set Quantile sharpness = 10
+end
+
+subsection Training
+  # Number of samples processed per gradient update
+  set Batch size       = 32
+  # Maximum number of training epochs
+  set Number of epochs = 300
+  # Learning rate for the Adam optimizer
+  set Learning rate    = 5e-4
+  # ReduceLROnPlateau: multiplicative factor applied to LR on plateau
+  set LR scheduler factor   = 0.7
+  # ReduceLROnPlateau: epochs with no test-loss improvement before reducing LR
+  set LR scheduler patience = 8
+  # Initial weight of the supervised (MSE knot) loss relative to the physics loss.
+  # Start higher than KAN3 (0.5 vs 0.1) to bootstrap correct knot geometry early.
+  set Beta             = 0.5
+  # Multiplicative decay applied to Beta after each epoch; set to 1.0 to disable.
+  set Beta decay       = 0.99
+  # Lower bound on Beta after decay.  Beta is clamped to max(Beta * decay, Beta min)
+  # at the end of each epoch so that some supervised signal always remains.
+  # This prevents the pure-physics local minimum (all knots collapsed near 0) seen in
+  # KAN3 experiments with aggressive beta decay.
+  set Beta min         = 0.05
+  # L2 regularisation coefficient for Adam
+  set Weight decay     = 1e-4
+  # Number of epochs without improvement before triggering early stopping
+  set Patience         = 20
+  # Refine KAN spline grids from observed activations every this many epochs (0 = disable)
+  set Grid update interval = 5
+  # Save a checkpoint to disk every this many epochs (0 = disable)
+  set Checkpoint interval  = 10
+end
