@@ -1,21 +1,35 @@
 """
 [task1/KAN4] Post-training analysis for the sliding-window KAN.
 
-Loads the trained KAN model and performs:
-- Plotting the spline activations for each edge in the network.
+Loads the trained KAN4 model and performs:
+- Plotting the KAN overview (spline activation thumbnails, operator symbols,
+  edge attributions) via plot_kan_overview().
 - Extracting and printing the symbolic formula for each output dimension.
+
+Overview plot (plot_kan_overview)
+----------------------------------
+- Figure width stretched by f = sqrt(max_edges / 5) to keep thumbnails readable.
+- Per-layer thumbnail half-size: y1 = max(0.4 / max(N, 5), y2).
+- All image insets (thumbnails, ⊕/⊗ symbols) are rendered square in display
+  space; NFC width = NFC height × (figheight / figwidth) to undo x-stretching.
+- Node scatter dots sized to match operator symbol diameter.
+- Edge transparency: alpha = tanh(beta * attribution_score).
+- Z-order: edges sorted by attribution so important thumbnails render on top.
+- Spline PNGs saved at lw=4, dpi=600 for crisp curves.
 
 Changes vs KAN3/post_train.py
 ------------------------------
 - Loads quantile_sharpness and mult_arity from the checkpoint instead of
   histogram_bandwidth; reconstructs _tau and _alpha instead of hist_weights.
-- extract_windows computes chord lengths + turning angles (rotation-invariant intrinsic
-  features matching train_gpu.py).  KAN3/post_train.py incorrectly used centroid
-  subtraction on raw coordinates — this is fixed in KAN4.
+- extract_windows computes chord lengths + turning angles (rotation-invariant
+  intrinsic features matching train_gpu.py).  KAN3/post_train.py incorrectly
+  used centroid subtraction on raw coordinates — this is fixed in KAN4.
 - The warm-up forward pass feeds window-extracted intrinsic features of shape
   (batch*N_w, n_features) to match the KAN's actual input domain.
 - The formula description reflects the n_features intrinsic geometric inputs.
 - Model is constructed with mult_arity to match the training-time architecture.
+- plot_kan_overview() replaces pykan's model.plot() with a custom implementation
+  that remains readable for wide networks.
 """
 
 import torch
@@ -221,12 +235,22 @@ def plot_kan_overview(
     """
     KAN overview plot — adapted from pykan's MultKAN.plot().
 
-    Differences from pykan:
-    - `scale` parameter matches pykan's (default 0.5 → ~500×400 px at 100 dpi).
-    - Per-row adaptive thumbnail size: y1_l = 0.4/max(N_l, 5) per layer,
-      so sparse layers get larger thumbnails and crowded ones fill their space.
-    - Lines stop short of thumbnail edges (15% gap) to avoid covering them.
-    - Sum/mult node symbols loaded from source/imgs/ PNGs.
+    Layout
+    ------
+    - Figure width is scaled by f = sqrt(max_edges / 5) so thumbnails stay
+      physically readable even for wide layers.
+    - Per-layer thumbnail half-size: y1 = max(0.4 / max(N, 5), y2), where y2
+      is the operator-symbol half-size.  Thumbnails and operator/mult symbols
+      are all rendered as **square images in display space** (NFC width =
+      NFC height × figheight/figwidth), so they remain circular regardless of
+      the horizontal stretch.
+    - Node scatter dots are sized to match the operator symbol diameter.
+    - Lines stop 15 % of y1 short of thumbnail edges.
+    - Spline PNGs saved at lw=4, dpi=600 for crisp curves.
+    - Edge transparency: alpha = tanh(beta * attribution_score).
+    - Z-order: edges sorted by attribution so high-importance thumbnails
+      render on top.
+    - Sum/mult node symbols loaded from source/imgs/*.png.
 
     Parameters
     ----------
@@ -485,16 +509,6 @@ def print_formula(model, lib, path):
 
 # --------------------------------------------------
 
-if PLOT:
-    print("Plotting splines ...")
-    fig = plot_kan_overview(model, scale=0.5)
-    fig.savefig("figures/model_plot.png", bbox_inches="tight", dpi=150)
-    plt.close(fig)
-    print("Done.")
-else:
-    print("Skipping plotting.")
-
-
 if FORMULA:
     libs = {
         "formula_full.txt":   ['x','x^2','x^3','1/x','1/x^2','1/x^3','sqrt','sin','cos','tan','tanh','exp','log','abs','sgn','0'],
@@ -507,3 +521,14 @@ if FORMULA:
         print_formula(model, lib, os.path.join(output_dir, filename))
 else:
     print("Skipping formula extraction.")
+
+
+# move after due to plotting shenanigans
+if PLOT:
+    print("Plotting splines ...")
+    fig = plot_kan_overview(model, scale=0.5)
+    fig.savefig("figures/model_plot.png", bbox_inches="tight", dpi=150)
+    plt.close(fig)
+    print("Done.")
+else:
+    print("Skipping plotting.")

@@ -224,6 +224,7 @@ for mode in modes:
 
         err = torch.sum((points - basis_matrix @ controls) ** 2).item()
 
+        points     = points.cpu().numpy()
         full_knots = full_knots.cpu().numpy()
         controls   = controls.cpu().numpy()
 
