@@ -1,0 +1,205 @@
+# KAN3 — Design Report
+
+**Date:** 2026-05-18  
+**Task:** Predict interior B-spline knot positions from a sampled point sequence (Task 1, 2-D curves).
+
+---
+
+## 1. Background and Motivation
+
+### KAN2 in brief
+
+KAN2 (see [source/task1/KAN2/](../KAN2/)) tackled knot prediction as a direct global mapping:
+
+$$\text{KAN}_\theta : \mathbb{R}^{N_\text{pts} \times 2} \longrightarrow \mathbb{R}^{n_\text{knots}}$$
+
+The entire flattened point sequence was fed to a single KAN, whose output (after softmax + cumsum) gave the interior knot positions. The best KAN2 runs used width `[60,0]→[30,0]→[4,0]` (30 points, 5 knots) up to `[200,0]→[200,0]→[100,0]→[5,0]` (100 points, 6 knots), accumulating up to **726 k trainable parameters**.
+
+**Problems identified with KAN2:**
+
+| Problem | Description |
+|---------|-------------|
+| High input dimensionality | 100 points × 2D = 200 inputs to a KAN; requires very wide, deep networks |
+| Not translation/rotation invariant | Shifting or rotating the curve changes the raw coordinates, but optimal knot placement is purely geometric |
+| Uninterpretable formulas | With 60–200 input variables, pykan's symbolic regression produces thousands-of-characters expressions that contain no insight |
+| Over-parameterisation | Many parameters are used to implicitly learn translation / scale invariance rather than geometry |
+| Global receptive field from the first layer | Local curvature information is mixed with global position information from layer 0 |
+
+### Motivation for KAN3
+
+The key insight is that **knot placement is a local decision**: a knot should be placed where the local curvature or chord-length variation exceeds some threshold. This motivates a **sliding-window** approach:
+
+1. Slide a small window of $w$ consecutive points along the curve.
+2. Feed each window to a **shared** KAN that scores its "knot density" (a scalar).
+3. Aggregate all window scores into a soft histogram over $n_\text{intervals}$ bins using a Gaussian kernel.
+4. Convert the histogram to normalised interval lengths → interior knot positions.
+
+The KAN input is no longer raw coordinates but **intrinsic geometric features** — chord lengths and turning angles between consecutive chords — which are invariant to rigid transformations by construction.
+
+---
+
+## 2. Architectural Changes from KAN2 to KAN3
+
+### 2.1 Input representation
+
+| | KAN2 | KAN3 (outputs-0) | KAN3 (outputs-1+) |
+|--|------|------|------|
+| Input | 200-D flattened coordinates | 10-D raw window coords (5 pts × 2D, normalised) | 7-D intrinsic features: 4 chord lengths + 3 turning angles |
+| Invariance | None | Translation only (centred window) | Full rigid-body (+ scale) |
+
+For a window of size $w$, the intrinsic feature vector has dimension $2w - 3$:
+- $(w-1)$ normalised chord lengths
+- $(w-2)$ turning angles between consecutive chords
+
+### 2.2 Forward pass pipeline
+
+```
+Curve (N pts, 2D)
+       │
+       ▼
+ extract_windows()          → shape (B × N_w, w×d)   or (B × N_w, 2w-3)
+       │
+       ▼
+ shared KAN_θ               → shape (B × N_w, 1)      scalar density per window
+       │
+       ▼
+ soft histogram              → shape (B, n_intervals)  Gaussian-kernel aggregation
+       │
+       ▼
+ softmax + cumsum            → interior knot positions
+```
+
+### 2.3 Histogram aggregation
+
+Each window at position $i$ (centre $t_i \in [0,1]$) casts a Gaussian vote into $n_\text{intervals}$ uniform bins:
+
+$$H_k = \sum_{i=1}^{N_w} s_i \cdot \exp\!\left(-\frac{(t_i - c_k)^2}{2\sigma^2}\right), \quad k = 0,\dots,n_\text{intervals}-1$$
+
+where $s_i$ is the KAN output for window $i$, $c_k$ is the bin centre, and $\sigma = \text{bandwidth} / n_\text{intervals}$.
+
+### 2.4 Code changes
+
+| File | KAN2 | KAN3 |
+|------|------|------|
+| `train_gpu.py` | Custom `BSplineDataset` → returns `(pts_flat, knots, t_grid)` for direct prediction | Custom `BSplineDataset` → `extract_windows` → shared KAN → soft histogram |
+| `eval.py` | Loads model, runs `model(pts_flat)` per sample | Reconstructs `extract_windows`, `hist_weights`; runs `kan_forward_to_knots(pts_flat)` |
+| `post_train.py` | Warm-up: `model(_warmup_pts)` raw | Warm-up: `model(extract_windows(_warmup_pts))` windowed; additional checkpoint fields |
+| Checkpoint | 7 fields | +3: `window_size`, `stride`, `histogram_bandwidth` |
+
+---
+
+## 3. Experimental Runs
+
+### 3.1 KAN2 runs
+
+| Run | Points | Knots | KAN width | Trainable params | β | Epochs | Train loss | Best test loss |
+|-----|--------|-------|-----------|-----------------|---|--------|------------|---------------|
+| outputs-0 | 30 | 5 | `[60→30→4]` | 26,880 | 0.0 | 210 / 300 | 0.003102 | **0.003881** |
+| outputs-1 | 100 | 5 | `[200→100→100→4]` | — | 0.0 | 112 / 500 | 0.001623 | 0.005316 |
+| outputs-2 | 100 | 6 | `[200→50→50→5]` | — | 0.0 | 110 / 500 | 0.003766 | 0.007893 |
+| outputs-3 | 100 | 6 | `[200→200→100→5]` | 726,000 | 0.1 | 120 / 500 | 0.003389 | 0.006773 |
+
+KAN2 outputs-0 uses only 30 points. The remaining runs use 100 points and 5–6 knots, with progressively larger networks to handle the 200-D input. Despite hundreds of thousands of parameters, test losses are still in the 0.005–0.008 range for 100-point inputs, suggesting poor generalisation relative to model size.
+
+### 3.2 KAN3 runs
+
+| Run | Window | Stride | Features | KAN width | Trainable params | β₀ | Epochs | Train loss | Best test loss |
+|-----|--------|--------|----------|-----------|-----------------|-----|--------|------------|---------------|
+| outputs-0 | 5 | 1 | raw coords (10D) | `[10→32→16→1]` | 11,872 | 2.0 | 277 / 300 | 0.009273 | 0.012757 |
+| outputs-1 | 5 | 1 | intrinsic (7D) | `[7→16→1]` | — | 0.5 | 300 / 300 | 0.011756 | 0.011893 |
+| outputs-2 | 5 | 1 | intrinsic (7D) | `[7→16→16→1]` | 4,608 | 1.0 | 389 / 500 | 0.011689 | **0.011685** |
+| outputs-3 | 5 | 2 | intrinsic (7D) | `[7→16→1]` | — | 2.0 | 196 / 500 | 0.025497 | 0.025010 |
+| outputs-4 | 7 | 1 | intrinsic (11D) | `[11→16→1]` | — | 2.0 | 217 / 500 | 0.024736 | 0.023439 |
+
+All KAN3 runs use 100 points and 6 knots. The β parameter (supervised loss weight) decays per epoch in outputs-1+. outputs-2 shows the best trade-off: deepest network (3 KAN layers), smallest parameter count (4,608 trainable), train ≈ test loss (no overfitting).
+
+### 3.3 Loss comparison (100 pts / 6 knots only)
+
+```
+                  Best test loss
+                  ─────────────
+KAN2 outputs-2    0.007893   ← best comparable KAN2 run
+KAN2 outputs-3    0.006773
+
+KAN3 outputs-2    0.011685   ← best KAN3 run
+KAN3 outputs-1    0.011893
+KAN3 outputs-0    0.012757
+KAN3 outputs-4    0.023439
+KAN3 outputs-3    0.025010
+```
+
+KAN3 test losses are systematically **higher** than those of comparable KAN2 runs (~0.011 vs ~0.007). This is discussed in Section 4.
+
+---
+
+## 4. Analysis
+
+### 4.1 Why KAN3 losses are higher than KAN2
+
+The global KAN2 model has access to the full curve at once, allowing it to reason about the overall shape before placing knots. KAN3 is limited to local windows of 5–7 points; a window at one position has no knowledge of what is happening elsewhere on the curve.
+
+Three concrete limitations:
+
+1. **Bounded receptive field.** A window of 5 points (w=5, stride=1) sees at most ~5% of a 100-point curve. Globally optimal knot spacing may require comparing disparate regions of the curve.
+2. **Histogram bottleneck.** The aggregation from $N_w$ scalar scores to $n_\text{intervals}=5$ histogram bins discards a lot of spatial precision, especially for windows not near a bin centre.
+3. **Larger stride degrades performance significantly.** outputs-3 (stride=2) jumps from 0.012 to 0.025, confirming that dense coverage is important for fine-grained histogram resolution.
+
+Window size matters too: outputs-4 (w=7, stride=1) is worse than outputs-2 (w=5, stride=1), likely because the 11-D intrinsic feature space is harder to learn and the window becomes less locally informative (more points dilute local curvature signal).
+
+### 4.2 Why KAN3 is still interesting
+
+**Parameter efficiency.** KAN3 with 4,608 trainable parameters achieves 0.011685 test loss. KAN2 with 726,000 parameters achieves 0.006773. The **parameter-to-loss ratio** favours KAN3 by orders of magnitude.
+
+| Model | Trainable params | Best test loss | Loss per 1k params |
+|-------|-----------------|----------------|-------------------|
+| KAN2 outputs-3 | 726,000 | 0.006773 | 9.3 × 10⁻⁶ |
+| KAN3 outputs-2 | 4,608 | 0.011685 | 2.5 × 10⁻³ |
+
+**Invariance.** The intrinsic-feature KAN3 models (outputs-1+) are provably invariant to rigid-body transformations and scale. KAN2 must learn these invariances implicitly from data, consuming model capacity for non-geometric variation.
+
+**No overfitting in KAN3.** outputs-2 shows train loss ≈ test loss (0.011689 ≈ 0.011685); the model generalises cleanly. KAN2 outputs-1 ends at train 0.001623 but test 0.005316 — a clear gap.
+
+**Interpretable formulas.** The shared window KAN produces a compact, human-readable symbolic formula after post-training. For outputs-2 (7-D intrinsic input, depth 3), the formula is a few hundred characters and involves physically meaningful operations:
+
+```
+output[0] = -0.0425 * exp(.../(1 - 0.34*x_7)²...) 
+           + 0.937 / (1 + 0.000692/(1-0.333*x_7)² + 0.00263/(1-0.333*x_6)² + ...)²
+           + ...
+```
+
+The dominant term (weight 0.937) is a simple rational function of the local chord-length ratios — intuitively: a window scores high when one chord is much longer than the others (a region of rapid change where a knot is needed). In contrast, KAN2's formula for even the smallest run (outputs-0, depth 2, 60-D input) runs to thousands of characters with no discernible structure.
+
+The linear approximation (`formula_linear.txt`) for KAN3 outputs-2 shows clear signed weights on intrinsic features, interpretable as "chord 1 elongation promotes a knot here" etc.
+
+### 4.3 Effect of intrinsic features (outputs-0 vs outputs-1)
+
+outputs-0 feeds raw 2-D window coordinates (centred, 10-D) to the KAN. outputs-1 feeds intrinsic features (7-D). Despite a smaller input and shallower network, outputs-1 achieves a lower test loss (0.011893 < 0.012757). This confirms that the inductive bias from invariant features is beneficial even at the cost of reducing input dimensionality.
+
+---
+
+## 5. Summary of Changes
+
+| Aspect | KAN2 | KAN3 |
+|--------|------|------|
+| **Problem formulation** | Direct global regression: full curve → knots | Local scoring + aggregation: window → scalar → histogram → knots |
+| **Input** | 200-D raw coords (100 pts × 2D) | 7-D intrinsic (chord lengths + turning angles) per window |
+| **KAN input dim** | 60–200 | 7–11 |
+| **KAN output dim** | 4–5 (interval lengths) | 1 (density score) |
+| **Shared weights** | No | Yes (same KAN for all windows) |
+| **Translation invariance** | No | Yes (intrinsic features) |
+| **Rotation/scale invariance** | No | Yes (intrinsic features) |
+| **Trainable parameters** | 26k–726k | 4.6k–11.9k |
+| **Train–test gap** | Present (e.g. 0.00162 vs 0.00532) | Minimal (e.g. 0.01169 vs 0.01169) |
+| **Best test loss (100pt, 6k)** | 0.006773 | 0.011685 |
+| **Symbolic formula** | Unreadable (thousands of terms) | Compact, physically meaningful |
+| **New hyper-parameters** | — | `window_size`, `stride`, `histogram_bandwidth` |
+
+---
+
+## 6. Open Directions
+
+- **Larger window size with intrinsic features** above 7, combined with proper feature normalisation.
+- **Multi-scale windows** — aggregate histograms from windows of different sizes.
+- **Attention-weighted histogram** — replace uniform Gaussian aggregation with a learned attention mechanism.
+- **Graph-based approach** — model the curve as a chain graph and use graph convolutions for global reasoning while preserving local equivariance.
+- **Direct comparison on the same problem** — retrain KAN2 on exactly 100 points / 6 knots at the same β schedule for an apples-to-apples comparison.

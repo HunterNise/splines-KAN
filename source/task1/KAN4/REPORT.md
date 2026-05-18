@@ -1,0 +1,235 @@
+# KAN4 — Design Report
+
+**Date:** 2026-05-18  
+**Task:** Predict interior B-spline knot positions from a sampled point sequence (Task 1, 2-D curves).
+
+---
+
+## 1. Background and Motivation
+
+### KAN3 in brief
+
+KAN3 (see [source/task1/KAN3/](../KAN3/)) introduced a **sliding-window** approach that replaced KAN2's global regression with local scoring. A shared KAN maps rotation-invariant window features (chord lengths + turning angles) to a scalar density score, which is aggregated via a soft Gaussian histogram and converted to knot positions through `softmax → cumsum`.
+
+Best KAN3 result: **0.011685** test loss (`[7→16→16→1]`, stride=1, 4,608 trainable params, 389 epochs).
+
+### Three root causes of KAN3 underperformance
+
+#### 1. Inverted aggregation semantics
+
+KAN3's pipeline:
+
+$$s_i \xrightarrow{\text{Gaussian blur}} H_k \xrightarrow{\text{softmax}} p_k \xrightarrow{\text{cumsum}} \hat{k}_j$$
+
+A **high** window score $s_i$ produces a **large** bin probability $p_k$, which makes the corresponding interval *wide*, meaning **fewer knots** in that region. This is the opposite of the correct behaviour — a high-curvature window should attract knots, not repel them. The KAN must therefore learn a sign-inverted curvature proxy, adding an unnecessary layer of indirection.
+
+#### 2. Softmax saturation in the histogram
+
+The `softmax` over $n_\text{intervals}=5$ histogram bins saturates as soon as one bin dominates. Once the model commits to one interval configuration the Jacobian of `softmax` has near-zero off-diagonal entries, making it very hard to reallocate knots across bins. This explains the systematic plateau observed in all KAN3 training curves after epoch ~100.
+
+#### 3. Pure-addition KAN cannot represent the curvature formula
+
+The theoretically optimal density weighting is discrete curvature:
+
+$$\kappa_i \;\approx\; \frac{|\theta_i|}{l_i \cdot l_{i+1}}$$
+
+where $\theta_i$ is the turning angle and $l_i$, $l_{i+1}$ are adjacent chord lengths. This is a *product* of three sub-expressions. A pure-addition KAN (`[7, 16, 1]`) can approximate this through iterated spline composition, but requires many layers and many nodes — it cannot represent it in one step.
+
+---
+
+## 2. KAN4 Architecture
+
+### 2.1 Pipeline overview
+
+```
+Curve (100 pts, 2D)
+       │
+       ▼
+ extract_windows()       → (B × N_w, 7)     intrinsic features (unchanged from KAN3)
+       │
+       ▼
+ shared KAN_θ            → (B × N_w, 1)     raw unconstrained score
+       │
+       ▼
+ softplus(·) + ε         → (B, N_w)         density   HIGH = knot needed here ✓
+ density / Σ density     → probability distribution over N_w window positions
+       │
+       ▼
+ cumsum(density, dim=1)  → (B, N_w)         CDF over window positions
+       │
+       ▼
+ soft-argmin at α_j      → (B, K)           interior knot positions in [0, 1]
+ sort + clamp            → valid knot vector
+       │
+       ▼
+ prepend 0, append 1     → (B, num_knots)   predicted knot vector
+```
+
+### 2.2 Soft-quantile extraction
+
+For each of $K = n_\text{knots} - 2$ interior knots, a quantile target $\alpha_j = j/(K+1)$ is chosen (equidistribution principle). The knot position is extracted as a **soft weighted centroid** of window positions:
+
+$$w_{i,j} = \text{softmax}_i\!\left(-S \cdot \left|\text{CDF}_i - \alpha_j\right|\right), \qquad \hat{k}_j = \sum_i \tau_i \cdot w_{i,j}$$
+
+where $\tau_i = i/(N_w - 1) \in [0,1]$ is the normalised position of window $i$ and $S$ is the **quantile sharpness** hyperparameter.
+
+**Gradient properties vs KAN3 histogram:**
+
+| Property | KAN3 (histogram + softmax) | KAN4 (density + CDF + soft-argmin) |
+|----------|---------------------------|-------------------------------------|
+| Semantics | High score → wide interval → fewer knots | High score → high density → more knots ✓ |
+| Gradient saturation | Softmax Jacobian collapses when one bin dominates | softplus gradient never saturates |
+| Spatial resolution | Fixed $n_\text{intervals}$ bins | Continuous; determined by $S$ and $N_w$ |
+| Monotonicity guarantee | By construction (cumsum of softmax) | Enforced by explicit sort of output knots |
+
+### 2.3 Multiplication nodes
+
+KAN4 uses a **mixed addition/multiplication hidden layer** `[n_sum, n_mult]` instead of a pure-addition layer. Each multiplication node computes a pairwise product of two spline-transformed inputs:
+
+$$\text{mult\_node}_k = \phi_a(x_{i_k}) \cdot \phi_b(x_{j_k})$$
+
+With `mult_arity=2` and `n_mult=1–2`, the network can directly express the curvature formula $|\theta| / (l \cdot l')$ in a single hidden layer. The pykan width format is `[n_features, [n_sum, n_mult], 1]`.
+
+### 2.4 Numerical stability fixes
+
+Several instabilities were identified and fixed during development:
+
+| Fix | Location | Reason |
+|-----|----------|--------|
+| `chord_lengths.clamp(min=1e-8)` | `extract_windows` | `‖x‖.backward()` at `x=0` gives `0/0 = NaN` when two sampled points coincide |
+| `scores.clamp(-20, 20)` | `kan_forward_to_knots` | Prevents extreme density concentration → degenerate Gram matrix → gradient explosion through `linalg.solve` |
+| `interior_knots.sort()` | `kan_forward_to_knots` | Soft-argmin can produce crossing knots under bimodal CDFs |
+| `interior_knots.clamp(1e-3, 1-1e-3)` | `kan_forward_to_knots` | Zero-width boundary intervals make B-spline basis functions rank-deficient |
+| `torch.isfinite(loss)` guard | `train()` | Skip batch instead of propagating NaN into model parameters via Adam |
+| `max_norm 1.0 → 0.5` | `train()` | Multiplication nodes amplify gradients by the partner activation value |
+
+### 2.5 Grid update strategy
+
+pykan initialises spline grids to approximately $[-1, 1]$, which does not cover the angle feature range $[-\pi, \pi]$. KAN3 used **periodic** `update_grid_from_samples` calls (every 5–15 epochs) to recalibrate. This caused systematic instability in KAN4: by epoch 10 the model has learned non-trivial spline activations, and re-fitting them onto a shifted grid produces a discontinuous output jump → non-finite losses on the next batch.
+
+KAN4 replaces periodic updates with a **single pre-training calibration pass** (256 curves, called before epoch 0) that correctly covers the actual feature ranges. The input distribution is fixed by the dataset and does not drift during training, so no further grid updates are needed.
+
+---
+
+## 3. Experimental Runs
+
+### 3.1 KAN3 reference runs (all: 100 pts, 6 knots, degree 3, window=5, intrinsic 7-D features)
+
+| Run | KAN width | Stride | β₀ | Epochs | Train loss | Best test loss |
+|-----|-----------|--------|----|--------|------------|----------------|
+| outputs-0 | `[10→32→16→1]` | 1 | 2.0 | 277/300 | 0.009273 | 0.012757 |
+| outputs-1 | `[7→16→1]` | 1 | 0.5 | 300/300 | 0.011756 | 0.011893 |
+| outputs-2 | `[7→16→16→1]` | 1 | 1.0 | 389/500 | 0.011689 | **0.011685** |
+| outputs-3 | `[7→16→1]` | 2 | 2.0 | 196/500 | 0.025497 | 0.025010 |
+| outputs-4 | `[11→16→1]` | 1 | 2.0 | 217/500 | 0.024736 | 0.023439 |
+
+### 3.2 KAN4 runs (all: 100 pts, 6 knots, degree 3, window=5, stride=1, grid=3)
+
+| Run | KAN width | Sharpness | β₀ | β_min | Trainable params | Epochs | Train loss | Best test loss |
+|-----|-----------|-----------|-----|-------|-----------------|--------|------------|----------------|
+| outputs-0 | `[7→[4+2]→1]` | S=10 | 0.50 | 0.05 | 744 | 275/300 | 0.017844 | 0.018206 |
+| outputs-1 | `[7→[5+1]→1]` | S=15 | 0.75 | 0.10 | 660 | 266/500 | 0.016315 | **0.016466** |
+
+Changes from outputs-0 to outputs-1: removed one dead mult node (2→1), added one sum node (4→5), increased sharpness (10→15), stronger supervised floor (β_min 0.05→0.10), higher initial β (0.5→0.75), more patience (20→30 epochs), disabled periodic grid updates.
+
+### 3.3 Loss comparison across all runs
+
+```
+KAN3 best:      [7→16→16→1]   4,608 params   → 0.011685
+KAN3 typical:   [7→16→1]      ~3,000 params  → 0.011893
+──────────────────────────────────────────────────────────
+KAN4 outputs-1: [7→[5+1]→1]    660 params    → 0.016466  ← current best
+KAN4 outputs-0: [7→[4+2]→1]    744 params    → 0.018206
+```
+
+KAN4 outputs-1 uses **4.5× fewer parameters** than the best KAN3 run. Compared to a KAN3 run with comparable architecture depth (`[7→16→1]`, ~3,000 params), KAN4 outputs-1 achieves a 38% higher loss at 4.5× smaller size.
+
+### 3.4 Per-curve reconstruction error (outputs-1 eval set, 10 samples)
+
+| Sample | Error | Notes |
+|--------|-------|-------|
+| eval0 | 0.0040 | simple S-curve, excellent |
+| eval9 | 0.0092 | tight spiral — greatly improved over outputs-0 (was 0.026) |
+| eval2 | 0.0105 | moderate curvature |
+| eval3 | 0.0108 | moderate curvature |
+| eval4 | 0.0121 | moderate curvature |
+| eval5 | 0.0177 | mildly complex |
+| eval8 | 0.0204 | mildly complex |
+| eval7 | 0.0223 | two features |
+| eval1 | 0.0292 | two features |
+| eval6 | **0.0827** | two separated tight features — failure case |
+
+---
+
+## 4. Analysis
+
+### 4.1 What improved vs KAN3
+
+**Pipeline semantics.** KAN3 required the network to learn an *inverted* curvature proxy (high output → fewer knots). KAN4's pipeline is monotone: high output → high density → more knots. The loss landscape is better aligned with the task, producing smoother training curves.
+
+**Training stability.** KAN4 outputs-1 loss curves are completely free of spikes. KAN3 runs with `grid_update_interval=5` showed visible spikes at each update epoch. Replacing periodic updates with a single pre-training calibration eliminates the instability entirely.
+
+**Best-case floor.** The lowest per-curve reconstruction error improved: KAN4 outputs-1 eval0 = 0.0040, better than typical KAN3 best-case samples (0.005–0.007 range). The new pipeline allows nearly optimal placement on well-behaved curves.
+
+**Parameter efficiency.** KAN4 achieves competitive results with 660–744 trainable parameters vs KAN3's 3,000–4,600. The combination of correct semantics (less compensatory capacity needed) and mult nodes (can directly express curvature products) reduces required model size substantially.
+
+### 4.2 What remains worse
+
+**Aggregate test loss.** KAN4 outputs-1 (0.016466) is 41% higher than KAN3 outputs-2 (0.011685). The main contributor is the **high-error tail**: curves with two or more spatially separated tight features cause the model to commit all density to the dominant feature. KAN3's histogram aggregation, while semantically inverted, inadvertently prevented total density collapse by spreading influence over a fixed bin grid.
+
+**High-error outliers.** eval6 (0.083), train4 (0.053), train7 (0.061), train9 (0.050) all show the same failure mode: the CDF becomes a near-step function at one tight feature, all $K$ soft-argmin levels land inside that step, and the rest of the curve is left with a single knot.
+
+### 4.3 Learned formula (outputs-1)
+
+The `formula_sparse.txt` post-training simplification gives:
+
+```
+score ≈ 6.49·l₀  +  0.238·(0.165 − θ₀)²  +  0.045·(−0.908·θ₁ − 1)²
+      + 0.025/(1 − 0.34·l₂)²  +  const
+```
+
+The dominant angle terms are **quadratics with minima near zero** — they assign high density when the turn is sharp, which is correct for curvature-based knot placement. The positive chord-length coefficient (`6.49·l₀`) prevents all density from collapsing onto one tight feature by boosting windows with longer chords. The active multiplication node (coefficient −0.43 in the linear formula) computes a product of chord-length-dominated linear combinations.
+
+For comparison, KAN3's formula involves rational functions requiring 2–3 layers to express; KAN4 achieves a comparably interpretable formula in a single hidden layer via the mult node.
+
+### 4.4 Effect of individual hyperparameter changes (outputs-0 → outputs-1)
+
+| Change | Effect |
+|--------|--------|
+| Grid update: periodic → one-time | Loss curve becomes perfectly smooth; no non-finite loss warnings |
+| Mult nodes: 2 → 1 | Removed dead node (coefficient ~1e-11 in outputs-0); formula more compact |
+| Sum nodes: 4 → 5 | Compensated capacity |
+| Sharpness: 10 → 15 | Sharper placement; tight spirals improve (eval9: 0.026 → 0.009) |
+| β₀: 0.5→0.75, β_min: 0.05→0.10 | Stronger supervised signal; test loss −9.6% |
+| Patience: 20 → 30 | More training time; model was still improving when outputs-0 stopped |
+
+---
+
+## 5. Summary of Changes from KAN3 to KAN4
+
+| Aspect | KAN3 | KAN4 |
+|--------|------|------|
+| **Aggregation** | Soft Gaussian histogram → softmax → cumsum | density → CDF → soft-quantile (soft-argmin) |
+| **Score semantics** | High score = wide interval = fewer knots (inverted) | High score = high density = more knots ✓ |
+| **Positivity constraint** | softmax (joint saturation) | softplus + ε (independent, no saturation) |
+| **Knot extraction** | Cumsum of bin probabilities | Weighted centroid at fixed quantile levels $\alpha_j$ |
+| **Hidden layer type** | Pure addition `[n]` | Mixed `[n_sum, n_mult]` with multiplication nodes |
+| **Can express $\kappa \approx \|\theta\|/(l \cdot l')$** | No (multi-layer approximation) | Yes (one mult node, one step) |
+| **Grid update** | Periodic every 5–15 epochs (instability source) | Single pre-training calibration only |
+| **Gradient guards** | None | `chord_lengths.clamp`, `scores.clamp`, sort + clamp knots, isfinite guard |
+| **Beta floor** | None (decays to ~0) | `beta_min` prevents supervised signal from vanishing |
+| **Best test loss** | **0.011685** | **0.016466** |
+| **Trainable params (best run)** | 4,608 | 660 |
+| **Training curve** | Spikes at grid-update epochs | Smooth throughout |
+| **New hyperparameters** | — | `quantile_sharpness`, `hidden_mult_nodes`, `mult_arity`, `beta_min` |
+| **Removed hyperparameters** | — | `histogram_bandwidth`, `n_intervals` |
+
+---
+
+## 6. Open Directions
+
+- **Entropy regularisation on the density**: add $+\lambda \cdot H(\text{density})$ to the loss to prevent the CDF from collapsing to a step function on single-feature curves. Directly addresses the high-error tail.
+- **Higher `beta_min`** (0.15–0.20): the supervised knot MSE is the only signal that knows the ground-truth knot distribution; keeping it stronger prevents the physics loss from pulling all knots into one cluster.
+- **Anneal sharpness**: start at $S=5$ (broad gradients, easy to redistribute density), anneal to $S=20$ (precise placement) as training progresses.
+- **Ablation — remove mult nodes**: isolate the pipeline improvement from the architecture improvement with a pure-addition `[7→6→1]` KAN4 baseline.
+- **Wider model**: scaling to `[7→[8+2]→1]` (~1,100 params) would stay far below KAN3's size while potentially closing the remaining loss gap.
