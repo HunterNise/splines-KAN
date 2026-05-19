@@ -1,0 +1,135 @@
+# Training configuration for the KAN5 B-spline knot prediction model.
+# Parameter file following the deal.II .prm convention:
+#   subsection <Name>
+#     set <Key> = <Value>
+#   end
+#
+# Changes vs KAN4/train.prm
+# --------------------------
+# - Window size default changed from 5 to 3.
+#   With w=3: n_features = 2*3-3 = 3 = [l_0, l_1, θ_0] — minimum feature set
+#   that encodes discrete curvature κ ≈ |θ_0| / (l_0 · l_1).
+#
+# - "Rebalancer hidden nodes" added.  Hidden-layer width for the optional Stage 2
+#   global rebalancer KAN.  Set to 0 (default) to disable Stage 2 entirely; set
+#   to K (= num_knots - 2) or larger to enable global knot redistribution.
+#
+# - "Rebalancer delta scale" added.  Maximum per-knot correction magnitude:
+#   delta_final = delta_scale * tanh(rebalancer_output).
+#
+# - "Entropy lambda" added.  Weight on the density entropy regularisation term
+#   L_entropy = Σ_i density_i * log(density_i) (negative entropy, added to loss).
+#   λ ≈ 0.01–0.05 prevents density collapse without over-smoothing.
+#
+# - "Chord length lambda" added.  Weight on the chord-length auxiliary loss
+#   MSE(pred_knots, k^{cl}) where k^{cl} is the parameter-free chord-length
+#   equidistribution estimate.  Acts as a geometric curriculum that doesn't
+#   require ground-truth labels.
+#
+# - "Chord length lambda decay" added.  Multiplicative factor applied to
+#   chord_length_lambda after each epoch (1.0 = constant; 0.99 = slow decay).
+#
+# - Grid update interval set to 0 (disabled by default) matching KAN4 outputs-1
+#   where periodic grid updates caused instability with multiplication nodes.
+
+
+subsection Dataset
+  # Path to the training dataset (.npz file)
+  set Path             = data/SplinegenDataset/2d_train.npz
+  # Number of knots (without repetitions/clamping)
+  set Number of knots  = 6
+  # Number of data points sampled from each B-spline curve
+  set Number of points = 100
+end
+
+subsection Model
+  # Number of addition (sum) nodes in the Stage 1 hidden layer.
+  # With w=3 and n_features=3, the function to learn (κ ≈ |θ|/(l₀·l₁)) has 3
+  # inputs.  3 sum nodes provide enough linear combinations before the output.
+  set Hidden sum nodes  = 3
+
+  # Number of multiplication nodes in the Stage 1 hidden layer.
+  # One mult node (arity=2) can directly compute a product of two spline-
+  # transformed inputs, e.g. softplus(θ) * (1/l₀) — matching the curvature
+  # formula without needing multiple layers.
+  set Hidden mult nodes = 1
+
+  # Arity (number of inputs) for each multiplication node.
+  # arity=2 gives pairwise products f(x_a) * g(x_b).
+  set Mult arity        = 2
+
+  # Number of grid intervals per spline activation function.
+  # 3 is sufficient for a smooth low-dimensional density proxy.
+  set Grid intervals    = 5
+
+  # Spline order for KAN edge activations (3 = cubic B-splines)
+  set Spline order      = 3
+
+  # Number of consecutive curve points per sliding window.
+  # Default 3: smallest window capturing one turning angle.
+  # n_features = 2*window_size - 3 = 3 → [l_0, l_1, θ_0].
+  set Window size       = 3
+
+  # Step between consecutive windows along the point sequence (>= 1)
+  set Stride            = 1
+
+  # Sharpness of the soft-argmin used to extract each interior knot from the
+  # density CDF.  Recommended range 10–30.
+  set Quantile sharpness = 25
+
+  # Hidden-layer width for the optional Stage 2 global rebalancer KAN.
+  # Stage 2 architecture: [K, rebalancer_hidden, K] where K = num_knots - 2.
+  # Set to 0 to disable Stage 2 (KAN5 outputs-0 starts without it).
+  # Try K (= 4 for 6 knots) or 2*K for a first enabled run.
+  set Rebalancer hidden nodes = 8
+
+  # Maximum per-knot correction magnitude from Stage 2:
+  #   k_final = k_stage1 + delta_scale * tanh(rebalancer_output)
+  # 0.3 allows up to ±0.3 correction in parameter space while bounding the range.
+  set Rebalancer delta scale  = 0.2
+end
+
+subsection Training
+  # Number of samples processed per gradient update
+  set Batch size       = 32
+  # Maximum number of training epochs
+  set Number of epochs = 600
+  # Learning rate for the Adam optimizer
+  set Learning rate    = 5e-4
+  # ReduceLROnPlateau: multiplicative factor applied to LR on plateau
+  set LR scheduler factor   = 0.7
+  # ReduceLROnPlateau: epochs with no test-loss improvement before reducing LR
+  set LR scheduler patience = 8
+  # Initial weight of the supervised (MSE knot) loss relative to the physics loss.
+  set Beta             = 1.0
+  # Multiplicative decay applied to Beta after each epoch.
+  set Beta decay       = 0.995
+  # Lower bound on Beta after decay.
+  set Beta min         = 0.20
+  # L2 regularisation coefficient for Adam
+  set Weight decay     = 1e-4
+  # Number of epochs without test-loss improvement before early stopping
+  set Patience         = 50
+  # Epochs for which Stage 2 (rebalancer) is frozen so Stage 1 must learn
+  # non-uniform density independently.  Stage 2 is unfrozen at this epoch and
+  # its grid is recalibrated from Stage 1's trained outputs at that point.
+  # Set to 0 to disable warmup (Stage 2 always active, as in outputs-1/2).
+  set Rebalancer warmup epochs = 0
+  # Maximum gradient norm for Stage 2 (rebalancer) parameters, applied before
+  # the global Stage 1 clip.  Without a separate cap, Stage 1 dominates the
+  # combined norm and Stage 2 can take large unchecked steps after warmup.
+  set Rebalancer grad clip     = 0.1
+  # Periodic grid recalibration interval (0 = disabled; use pre-training only).
+  # Disabled by default: periodic updates cause instability with mult nodes.
+  set Grid update interval = 0
+  # Save a checkpoint to disk every this many epochs (0 = disable)
+  set Checkpoint interval  = 10
+  # Weight on density entropy regularisation: L += lambda * Σ d_i log(d_i)
+  # Prevents density collapse; 0.01–0.05 is typically sufficient.
+  set Entropy lambda   = 0.0
+  # Weight on chord-length auxiliary loss: L += lambda * MSE(knots, k^{cl})
+  # Provides a parameter-free geometric curriculum.  Set to 0.0 to disable.
+  set Chord length lambda       = 0.0
+  # Multiplicative decay applied to Chord length lambda after each epoch.
+  set Chord length lambda decay = 1.0
+end
