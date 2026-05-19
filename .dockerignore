@@ -1,0 +1,3 @@
+# exclude all files but requirements.txt in the docker folder
+*
+!docker/requirements.txt
