@@ -477,6 +477,11 @@ def _enforce_min_gap(knots):
 _n_ctrl  = num_knots + degree - 1
 _eye_reg = torch.eye(_n_ctrl, dtype=precision, device=device).unsqueeze(0) * 1e-6  # (1, M, M)
 
+# Gaussian sigma for direct density supervision targets.
+# Set to half the average spacing between interior knots so each Gaussian
+# covers roughly one inter-knot interval without overlapping its neighbours.
+_density_sigma = 0.5 / (num_interior + 1)
+
 # Collect all model parameters once (used for grad clipping in training loop)
 _all_model_params = list(model.parameters())
 if rebalancer_model is not None:
@@ -736,6 +741,7 @@ def train(num_epochs=100, tol=1e-6, lr=1e-3, weight_decay=0.0,
           beta=0.0, beta_decay=1.0, beta_min=0.0,
           entropy_lambda=0.0,
           chord_length_lambda=0.0, chord_length_lambda_decay=1.0,
+          density_lambda=0.0,
           patience=10,
           rebalancer_warmup=0,
           rebalancer_grad_clip=0.1,
@@ -895,6 +901,22 @@ def train(num_epochs=100, tol=1e-6, lr=1e-3, weight_decay=0.0,
                 chord_loss = F.mse_loss(pred_knots[:, 1:-1], cl_knots)
                 loss = loss + current_cl_lambda * chord_loss
 
+            # Direct density supervision — bypasses the flat soft-quantile gradient
+            # by giving Stage 1 an explicit per-window target distribution.
+            # Target: Gaussian bumps centred at each true interior knot position,
+            # normalised to sum to 1 over N_w windows.
+            # Applied only during the rebalancer warmup phase (when Stage 2 is
+            # frozen) so Stage 1 develops meaningful density before Stage 2 trains.
+            # When rebalancer_warmup == 0 (no warmup) it is applied every epoch.
+            if density_lambda > 0.0 and (rebalancer_warmup == 0 or epoch < rebalancer_warmup):
+                tau_bw   = _tau.view(1, N_w, 1)           # (1, N_w, 1)
+                knots_bw = labels_batch.unsqueeze(1)       # (B, 1, K)
+                target_dens = torch.exp(
+                    -(tau_bw - knots_bw) ** 2 / (2 * _density_sigma ** 2)
+                ).sum(dim=2)                               # (B, N_w)
+                target_dens = target_dens / target_dens.sum(dim=1, keepdim=True).clamp(min=1e-8)
+                loss = loss + density_lambda * F.mse_loss(density, target_dens)
+
             # On the first non-finite batch: print diagnostics and abort immediately.
             # All subsequent batches would also be NaN (corrupted parameters), so
             # there is no value in continuing the epoch.
@@ -1043,7 +1065,8 @@ def train(num_epochs=100, tol=1e-6, lr=1e-3, weight_decay=0.0,
         print()
 
         # Decay beta and chord-length lambda
-        current_beta      = max(beta_min, current_beta * beta_decay)
+        if epoch >= rebalancer_warmup:
+            current_beta = max(beta_min, current_beta * beta_decay)
         current_cl_lambda = current_cl_lambda * chord_length_lambda_decay
 
         scheduler.step(test_mean)
@@ -1115,6 +1138,7 @@ beta_min                   = prm.get_float("Training", "Beta min")
 entropy_lambda             = prm.get_float("Training", "Entropy lambda")
 chord_length_lambda        = prm.get_float("Training", "Chord length lambda")
 chord_length_lambda_decay  = prm.get_float("Training", "Chord length lambda decay")
+density_lambda             = prm.get_float("Training", "Density lambda")
 patience                   = prm.get_int("Training", "Patience")
 rebalancer_warmup          = prm.get_int("Training", "Rebalancer warmup epochs")
 rebalancer_grad_clip       = prm.get_float("Training", "Rebalancer grad clip")
@@ -1128,6 +1152,7 @@ train_losses, test_losses = train(
     entropy_lambda=entropy_lambda,
     chord_length_lambda=chord_length_lambda,
     chord_length_lambda_decay=chord_length_lambda_decay,
+    density_lambda=density_lambda,
     patience=patience, rebalancer_warmup=rebalancer_warmup,
     rebalancer_grad_clip=rebalancer_grad_clip,
     grid_update_interval=grid_update_interval,
@@ -1205,6 +1230,8 @@ with open(training_file, "w") as f:
     f.write(f"  Entropy lambda:             {entropy_lambda}\n")
     f.write(f"  Chord length lambda:        {chord_length_lambda}\n")
     f.write(f"  Chord length lambda decay:  {chord_length_lambda_decay}\n")
+    f.write(f"  Density lambda:             {density_lambda}\n")
+    f.write(f"  Density sigma (auto):       {_density_sigma:.6f}\n")
     f.write(f"  Patience:                   {patience} epochs\n")
 
     f.write("\nTraining results:\n")

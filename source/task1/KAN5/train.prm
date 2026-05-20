@@ -59,7 +59,8 @@ subsection Model
   set Mult arity        = 2
 
   # Number of grid intervals per spline activation function.
-  # 3 is sufficient for a smooth low-dimensional density proxy.
+  # 5 gives enough resolution for the spline activations to represent |θ|-based
+  # curvature functions without over-smoothing the density weights.
   set Grid intervals    = 5
 
   # Spline order for KAN edge activations (3 = cubic B-splines)
@@ -86,7 +87,7 @@ subsection Model
   # Maximum per-knot correction magnitude from Stage 2:
   #   k_final = k_stage1 + delta_scale * tanh(rebalancer_output)
   # 0.3 allows up to ±0.3 correction in parameter space while bounding the range.
-  set Rebalancer delta scale  = 0.2
+  set Rebalancer delta scale  = 0.3
 end
 
 subsection Training
@@ -114,7 +115,7 @@ subsection Training
   # non-uniform density independently.  Stage 2 is unfrozen at this epoch and
   # its grid is recalibrated from Stage 1's trained outputs at that point.
   # Set to 0 to disable warmup (Stage 2 always active, as in outputs-1/2).
-  set Rebalancer warmup epochs = 0
+  set Rebalancer warmup epochs = 150
   # Maximum gradient norm for Stage 2 (rebalancer) parameters, applied before
   # the global Stage 1 clip.  Without a separate cap, Stage 1 dominates the
   # combined norm and Stage 2 can take large unchecked steps after warmup.
@@ -132,4 +133,10 @@ subsection Training
   set Chord length lambda       = 0.0
   # Multiplicative decay applied to Chord length lambda after each epoch.
   set Chord length lambda decay = 1.0
+  # Weight on direct density supervision: L += lambda * MSE(density, target_density)
+  # Target density = sum of Gaussians (sigma = half inter-knot spacing) centred on
+  # true interior knots.  Applied only during warmup (epochs < Rebalancer warmup).
+  # Bypasses the flat soft-quantile gradient to teach Stage 1 where to put density.
+  # Typical range 0.5–2.0; 0.0 disables.
+  set Density lambda   = 1.0
 end
