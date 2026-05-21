@@ -11,12 +11,17 @@
 data/
 
 # output folders for the scripts
-**/outputs*/
+source/**/outputs*/
 # splines/model plots and model checkpoints from pykan
-**/figures/
-**/model/
+source/**/figures/
+source/**/model/
 
 # model architecture and training parameters files
 #**/model.py
 #**/train.prm
 # use git update-index --skip-worktree <file> to ignore changes to these files, but keep them in the repo
+
+
+# typst output files
+typst/*.pdf
+typst/*.svg
