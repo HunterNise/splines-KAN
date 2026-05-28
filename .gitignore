@@ -23,5 +23,5 @@ source/**/model/
 
 
 # typst output files
-typst/*.pdf
-typst/*.svg
+typst/**/*.pdf
+typst/**/*.svg
