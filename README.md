@@ -3,7 +3,7 @@ Project for the exams of [Numerical Methods for Graphics](https://unimap.unipi.i
 The idea is to leverage neural networks as a tool for scientific discovery. \
 We choose to consider the problem of B-spline approximation: given a point cloud, find the best fitting B-spline curve. \
 We are interested in whether Kolmogorov--Arnold networks may have an advantage over traditional vanilla neural networks, in terms of accuracy and/or interpretability. \
-You can find more information in the [slides]() and the references therein.
+You can find more information in the [slides](https://github.com/HunterNise/splines-KAN/blob/main/typst/slides.pdf) and the references therein.
 
 The source code for the experiments conducted are in the `source` folder; while the output results are available as a [release](https://github.com/HunterNise/splines-KAN/releases/tag/v1.0-results).
 
