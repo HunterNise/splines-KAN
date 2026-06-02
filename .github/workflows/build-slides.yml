@@ -1,0 +1,39 @@
+name: Build Slides
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "typst/**"
+      - "slides.sh"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+    container:
+      image: ghcr.io/hunternise/splines:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4.3.1
+
+      - name: Build slides
+        run: ./slides.sh
+
+      - name: Commit PDF
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}
+          git add -f typst/slides.pdf
+          git diff --cached --quiet || git commit -m "chore: update slides PDF [skip ci]"
+          git push
