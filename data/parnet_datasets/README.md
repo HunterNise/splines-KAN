@@ -21,12 +21,14 @@ parnet_datasets/
 ```
 
 Every two lines correspond to a point cloud:
-$$
+```math
+\begin{gather*}
  \vdots \\
- x_1, x_2, ..., x_n \\
- y_1, y_2, ..., y_n \\
+ x_1, x_2, \ldots, x_n \\
+ y_1, y_2, \ldots, y_n \\
  \vdots
-$$
+\end{gather*}
+```
 
 ---
 
