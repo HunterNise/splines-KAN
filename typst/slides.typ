@@ -18,7 +18,7 @@
 
 
 
-= #text(size: 40pt)[Title]
+= #text(size: 40pt)[B-Spline Approximation via Kolmogorov--Arnold Networks]
 
 = Motivation
 
@@ -120,7 +120,7 @@
     #place(bottom, dy: 1.0em)[
       #set text(fill: gray, size: 0.5em)
       Z. Liu, Y. Wang, S. Vaidya, F. Ruehle, J. Halverson, M. Soljačić, T. Y. Hou, M. Tegmark \
-      KAN: Kolmogorov-Arnold Networks. https://arxiv.org/abs/2404.19756
+      KAN: Kolmogorov--Arnold Networks. https://arxiv.org/abs/2404.19756
     ]
   ][
     #place(top, dx: 2cm, dy: 1cm)[
@@ -140,7 +140,7 @@
     #place(bottom + right, dx: -2cm, dy: 1.0em)[
       #set text(fill: gray, size: 0.5em)
       Z. Liu, P. Ma, Y. Wang, W. Matusik, M. Tegmark \
-      KAN 2.0: Kolmogorov-Arnold Networks Meet Science. https://arxiv.org/abs/2408.10205
+      KAN 2.0: Kolmogorov--Arnold Networks Meet Science. https://arxiv.org/abs/2408.10205
     ]
   ]
 ]
@@ -156,7 +156,7 @@
 
 = Problem
 
-== B-Spline approximation
+== B-Spline approximation <problem>
 
 #slide[
   data points : ${bold(P)_i}_(i=1)^N subset.eq RR^d$
@@ -215,7 +215,7 @@
 ]
 
 
-= (Vanilla) Neural Network \ #text(fill: navy, size: 0.55em)[a.k.a. feed-forward neural network, fully-connected network, multi-layer perceptron]
+= (Vanilla) Neural Network \ #text(fill: navy, size: 0.55em)[a.k.a. fully-connected feedforward network or multi-layer perceptron]
 
 == Neurons
 
@@ -354,12 +354,12 @@
   #grid(columns: (55%, auto), column-gutter: 2mm)[
     #image("diagrams/mlp-deep.svg")
   ][
-    $ f(bold(x)) = (W_L compose sigma_(L-1) compose ... compose sigma_1 compose W_1)(bold(x)) $
+    $ bold(f) (bold(x)) = (bold(W)_L compose sigma_(L-1) compose ... compose sigma_1 compose bold(W)_1)(bold(x)) $
     #v(0.75em)
 
     $ half bold(x) half = (x_1, ..., x_n) $
 
-    $ W_l = mat(
+    $ bold(W)_l = mat(
       w_(1 1)^((l)), ..., w_(1 N_(l-1))^((l));
       dots.v, dots.down, dots.v;
       w_(N_l 1)^((l)), ..., w_(N_l N_(l-1))^((l));
@@ -375,16 +375,16 @@
   *how to find weights?* $quad$ #text(size: 0.8em)[(don't know the true $f$, want to "learn" it from data)]
 
   #pause
-  $f_bold(theta)$ : statistical model, parametric function [network] \
+  $bold(f)_bold(theta)$ : statistical model, parametric function [network] \
   $bold(theta)$ : parameters [weights and biases] \
   ${(bold(x)_i, bold(y)_i)}_(i=1)^N$ : (supervised) dataset, (input, label) pairs \
-  $hat(bold(y)) = f_bold(theta) (bold(x))$ : prediction \
+  $hat(bold(y)) = bold(f)_bold(theta) (bold(x))$ : prediction \
   $cal(L) (bold(y), hat(bold(y)))$ : loss function, #text(size: 0.9em)[measures error between true label and prediction]
 
   #pause
   *Idea*: adjust parameters $bold(theta)$ to minimize error on training data
   #place(bottom + center, dy: 0.5em)[
-    $ min_(bold(theta) in Theta) sum_(i=1)^N cal(L) (bold(y)_i, f_bold(theta) (bold(x)_i)) $
+    $ min_(bold(theta) in Theta) sum_(i=1)^N cal(L) (bold(y)_i, bold(f)_bold(theta) (bold(x)_i)) $
   ]
 ]
 
@@ -412,7 +412,7 @@
 
   #v(-0.5em)
   $ bold(theta)^(k+1) := bold(theta)^k - eta thin nabla_(#h(-5pt) bold(theta)) cal(E)(bold(theta^k)) thick , wide 
-  cal(E)(bold(theta)) = 1/N sum_(i=1)^N cal(L) (bold(y)_i, f_bold(theta) (bold(x)_i)) $
+  cal(E)(bold(theta)) = 1/N sum_(i=1)^N cal(L) (bold(y)_i, bold(f)_bold(theta) (bold(x)_i)) $
   #v(-0.65em)
 
   $eta$ : learning rate, step size for parameter updates
@@ -422,5 +422,312 @@
 
   #pause
   *how to compute gradients?* \
-  backpropagation: chain rule (but efficient)
+  backpropagation: chain rule, but efficient (automatic differentiation)
+]
+
+
+= Kolmogorov--Arnold Network (KAN)
+
+== Kolmogorov--Arnold representation theorem
+
+#slide(repeat: 8, self => {
+  let (uncover, only, alternatives) = utils.methods(self)
+  [
+    *Idea*: multivariate is complicated (except +), but univariate is easy! \
+    $wide half$ separate variables as much as possible ($->$ easier derivatives)
+
+    #pause
+    $f(x,y) = phi.alt_1 (x) + phi.alt_2 (y) quad$ #text(size: 1.2em, fill: red)[#emoji.crossmark]
+    
+    #pause
+    #[
+      #show math.equation.where(block: true): it => align(left, it)
+      $ #h(8cm) x y = - x^2/2 - y^2/2 + #alternatives(start: 3)[$(x+y)$][$z$]^2/2
+      #only("4-")[
+        #h(4cm) $z = x + y$
+      ] $
+    ]
+    #v(0.5em)
+
+    #uncover("5-")[
+    #set text(size: 0.8em)
+    // #let addend(i) = [
+    //   #uncover("6-")[$Phi_#i ($] #uncover("5-")[$phi.alt_(#i,1) ($] $x_1$ #uncover("5-")[$)$] + #uncover("5-")[$phi.alt_(#i,2)($] $x_2$ #uncover("5-")[$)$] #uncover("6-")[$)$]
+    // ]
+    #let addend(i) = [
+      #uncover("7-")[$Phi_#i ($]
+        #alternatives(start: 5,)[
+          $#hide[$phi.alt_(#i,1) ($] x_1 #hide[$)$] + #hide[$phi.alt_(#i,2)($] x_2 #hide[$)$]$
+        ][
+          $phi.alt_(#i,1)(x_1) + phi.alt_(#i,2)(x_2)$
+        ][
+          $phi.alt_(#i,1)(x_1) + phi.alt_(#i,2)(x_2)$
+        ][
+          $underbrace(phi.alt_(#i,1)(x_1) + phi.alt_(#i,2)(x_2), t_#i)$
+        ]
+        #uncover("7-")[$)$]
+    ]
+    $ f(x_1, x_2) &= addend(1) + addend(2) + ... + addend(k) $
+    ]
+
+    #place(bottom, dy: 1em)[
+      #set text(fill: gray, size: 0.5em)
+      The Kolmogorov-Arnold Theorem. Luis Serrano Academy. \ https://www.youtube.com/watch?v=nS2hnm0JRBk
+    ]
+  ]
+})
+
+#slide[
+  #theorem[
+    Any continuous function $f : [0,1]^n -> RR$ can be represented as
+    #v(-0.45em)
+    $ f(x_1, ..., x_n) = sum_(q=1)^(2n+1) Phi_q ( sum_(p=1)^n phi.alt_(q, p) (x_p) ) $
+    #v(-0.45em)
+    where $Phi_q : RR -> RR$ and $phi.alt_(q, p) : [0,1] -> RR$ are continuous functions.
+  ]
+
+  #pause
+  #place(bottom, dx: -1em, dy: 2em)[
+    #image("images/yt-bounded.png", height: 6cm)
+  ]
+]
+
+== Kolmogorov--Arnold Network
+//== Shallow KAN
+
+#slide[
+  #image("images/yt-comparison.png")
+
+  #place(bottom, dy: 1em)[
+      #set text(fill: gray, size: 0.5em)
+      Kolmogorov-Arnold Networks (KANs) - What are they and how do they work?. Luis Serrano Academy. \ https://www.youtube.com/watch?v=myFtp5zMv8U
+    ]
+]
+
+//== Problems
+
+#slide[
+  #place(top, dy: 1.25em)[
+  #grid(columns: (50%, 1fr), column-gutter: 5mm, align: (left, center))[
+    #v(0.75em)
+
+    2 layers are enough for \ universal approximation!
+
+    #uncover("2-")[
+      but $phi.alt$ may be very "ugly" \
+      (e.g., non-smooth, fractal-like) \
+      #h(5em) $arrow.b$ \
+      not practical for ML \
+      (Girosi & Poggio, 1989)
+      #v(1em)
+    ]
+
+    #uncover("3-")[*Idea*: go deeper!]
+  ][
+    #alternatives()[
+      #image("images/yt-shallow.png", height: 12cm)
+    ][
+      #align(center)[
+        #image("images/CantorEscalier-2.svg", height: 11cm)
+        #v(-0.5em)
+        #text(fill: gray, size: 0.5em)[https://commons.wikimedia.org/wiki/File:CantorEscalier-2.svg]
+      ]
+    ][
+      #image("images/yt-deep.png", height: 13cm)
+    ]
+  ]]
+]
+
+//== Deep KAN
+
+#slide[
+  #grid(columns: (60%, 45%))[
+    $bold(f) (bold(x)) = (bold(Phi)_L compose ... compose bold(Phi)_1) (bold(x))$
+
+    $ bold(Phi)_l = mat(
+      phi.alt^((l))_(1, 1) (dot), ..., phi.alt^((l))_(1, N_(l-1))(dot);
+      dots.v, dots.down, dots.v;
+      phi.alt^((l))_(N_(l), 1) (dot), ..., phi.alt^((l))_(N_(l), N_(l-1))(dot);
+    ) $
+
+    arbitrary width KAN layer
+    #v(-0.5em)
+    $ x^((l+1))_j = sum_(i=1)^N_l phi.alt^((l+1))_(j,i) \( x^((l))_i \) , quad j = 1, ..., N_(l+1) $
+  ][
+    #image("images/kan-notation.png", width: auto)
+  ]
+
+  #place(top + right, dy: 1em)[
+    theorem $->$ $[n, 2n+1, 1]$ KAN
+  ]
+]
+
+#slide[
+  *how to parametrize $phi.alt$'s ?*
+
+  use 1D B-splines:
+  - flexible, can approximate \ any continuous function
+  - efficient to compute and differentiate
+  - need few parameters (\#ctrls = $G+k$)
+  - can be "fine-grained"
+  
+  #place(bottom + right, dx: 1em)[
+    #image("images/kan-spline.png", width: 12cm)
+  ]
+]
+
+== Interpretability
+
+#slide[
+  #place(bottom, dx: -1em)[
+    #image("images/kan-symbolic.png", height: 11cm)
+  ]
+
+  #place(top + right, dy: 0.5em)[
+    sparse: penalize \ non-zero prms
+
+    visualize: \
+    transparency
+
+    prune: smaller net
+    #v(1em)
+
+    symbolic setting: \
+    i/o shift/scaling \
+    $->$ fitting aff. prms \
+    $y approx c f (a x + b) + d $
+  ]
+]
+
+
+= Experiments
+
+== Task #h(1fr) #text(weight: "regular", fill: green)[#link(<problem>)[$arrow.t$ problem]]
+
+#slide[
+  *Goal*: find optimal knot vector of a B-spline fitting data points
+
+  #pause
+  For simplicity
+  - fixed degree $p=3$ (cubic B-splines)
+  - fixed number of points, ordered
+  - fixed number of knots
+  - fixed parametrization (uniform)
+
+  #pause
+  #place(bottom, dy: 1em)[
+    *What we want?* \
+    - find relationships with features, e.g. curvature
+    - accuracy is not the priority (but still important)
+    - learn something about the problem
+  ]
+
+  #place(bottom + right, dx: -5cm, dy: -1.5cm)[
+  #curve(
+    curve.move((0.5cm, -0.1cm)),
+    curve.cubic(
+      (3cm, 0cm),
+      (0cm, -1.5cm), (4cm, -1.75cm)
+    )
+  )]
+  #place(bottom + right, dy: -1em)[
+    #box(width: 5cm)[let's pretend we don't know this]
+  ]
+]
+
+== DNN Solver
+
+#slide[
+  #v(-1em)
+  #alternatives()[
+    #image("diagrams/pipeline1.svg", width: 25cm)
+  ][
+    #image("diagrams/pipeline2.svg", width: 25cm)
+    #v(-0.5em)
+  ]
+  
+  unsupervised training: only data points, no "ground truth" knots \
+  physics inspired loss : $norm( bold(P_#hide[i]) - B bold(C) )_F^2$
+
+  #place(bottom, dy: 1em)[
+    #set text(fill: gray, size: 0.5em)
+    Zepeng Wen, Jiaqi Luo, Hongmei Kang.
+    The deep neural network solver for B-spline approximation. \
+    Computer-Aided Design, vol.169, 103668, 2024.
+    https://doi.org/10.1016/j.cad.2023.103668
+  ]
+]
+
+== Trained model
+
+#slide[
+  #image("diagrams/pipeline3.svg", width: 25cm)
+
+  input: sampled B-spline curve + ground truth knots
+
+  #place(bottom, dy: 1em)[
+    #set text(fill: gray, size: 0.5em)
+    Pascal Laube, Matthias O. Franz, Georg Umlauf.
+    Deep Learning Parametrization for B-Spline Curve Approximation. \
+    https://arxiv.org/abs/1807.08304
+  ]
+]
+
+== Conclusions
+
+#slide[
+  #set list(spacing: 1em)
+  - lukewarm results, better ML skills & more time could help
+  - ML-driven development (no need for domain knowledge) \
+    e.g. sliding window $quad$ #sym.crossmark curvature local feature \
+    #hide[e.g. sliding window] $quad$ #sym.checkmark #box(baseline: 1.25em)[reduce number of input variables \ for more interpretable formulas]
+  - AI + human collaboration also at meta level \ 
+    (e.g. Copilot "auto-research")
+]
+
+== Future directions
+
+#slide[
+  - try other tasks (e.g. knot insertion/removal, variable number of knots, knots-parametrization alignment, surface fitting)
+  - use actually good architectures, i.e. SplineGen
+
+  #place(bottom)[
+    #alternatives(
+      image("images/splinegen-1.png", height: 8cm),
+      image("images/splinegen-2.png", height: 8cm)
+    )
+  ]
+  #only(2)[
+    #place(horizon + right, dx: 1em, dy: -2.25em)[
+      *how to make it \ interpretable???*
+    ]
+  ]
+
+  #place(bottom, dy: 1.25em)[
+    #set text(fill: gray, size: 0.5em)
+    Qiang Zou, Lizhen Zhu, Jiayu Wu, and Zhijie Yang.
+    SplineGen: Approximating unorganized points through generative AI. \
+    Computer-Aided Design, vol.178, 103809, 2025.
+    https://doi.org/10.1016/j.cad.2024.103809
+  ]
+]
+
+
+== SSPA
+
+#slide[
+  #set list(marker: [#sym.checkmark])
+  - docker + uv (docker-less setup on lab pc)
+  - bash, ssh, tmux
+  - git, pytest
+  - github actions & releases
+  - typst (compiler) $quad$ #sym.crossmark make (so fast, just recompile everything)
+
+  #set list(marker: [#sym.crossmark])
+  - doxygen/sphinx (comments/docstrings are enough)
+  - parallel training (only 1 GPU)
+
+  #pause
+  Honorable mention: Copilot (in particular Claude Sonnet) \
+  [RIP billing for request]
 ]

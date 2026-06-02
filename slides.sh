@@ -13,6 +13,7 @@ typst compile diagrams/slp.typ          diagrams/slp{p}.svg
 typst compile diagrams/xor.typ          diagrams/xor.svg
 typst compile diagrams/mlp-shallow.typ  diagrams/mlp-shallow{p}.svg
 typst compile diagrams/mlp-deep.typ     diagrams/mlp-deep.svg
+typst compile diagrams/pipeline.typ     diagrams/pipeline{p}.svg
 
 # compile the main file
 typst compile "slides.typ" "slides.pdf"
