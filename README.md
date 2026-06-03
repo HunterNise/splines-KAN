@@ -1,13 +1,12 @@
 Project for the exams of [Numerical Methods for Graphics](https://unimap.unipi.it/registri/dettregistriNEW.php?re=11063680::::&ri=027958) and [An Introduction to Scientific Software Tools & Parallel Algorithms (SSPA)](https://luca-heltai.github.io/sspa/).
 
-The idea is to leverage neural networks as a tool for scientific discovery. \
-We choose to consider the problem of B-spline approximation: given a point cloud, find the best fitting B-spline curve. \
+The idea is to leverage machine learning as a tool for scientific discovery: in particular, patterns are thought of as relationships between mathematical objects that can be approximated by neural networks. If the models are interpretable enough, they can guide mathematicians in formulating and proving conjectures. \
+The problem we consider is that of B-spline approximation: given a point cloud, find the best fitting B-spline curve. \
 We are interested in whether Kolmogorov--Arnold networks may have an advantage over traditional vanilla neural networks, in terms of accuracy and/or interpretability. \
 You can find more information in the [slides](https://github.com/HunterNise/splines-KAN/blob/main/typst/slides.pdf) and the references therein.
 
 The source code for the experiments conducted are in the `source` folder; while the output results are available as a [release](https://github.com/HunterNise/splines-KAN/releases/tag/v1.0-results).
 
----
 
 ## Installation
 
@@ -15,24 +14,35 @@ The source code for the experiments conducted are in the `source` folder; while 
 > This project is meant to be run in a Linux environment. No other environments have been tested. \
 > If you use Windows, install WSL.
 
-Clone the repository
+Assuming you have git installed, navigate to your favorite folder and clone the repository
 ```bash
 git clone https://github.com/HunterNise/splines-KAN.git
+cd splines-KAN
 ```
+The following commands assume you are at top directory.
 
 ### Docker setup
 
-This project uses docker for containerization, which means it is fully reproducible and does not mess up with your local packages. \
+This project uses Docker for containerization, which means it is fully reproducible and does not mess up with your local packages. \
 You will need to have docker installed: if you don't already, follow the [instructions](https://docs.docker.com/engine/install/) for your system.
 
 Then you will need the image of the project. You can either:
 - download the already built [image from the repo](https://github.com/HunterNise/splines-KAN/pkgs/container/splines);
-- or rebuild locally the image by running the script `setup.sh`.
+- or rebuild locally the image by running the script `setup.sh`
+```bash
+./setup.sh
+```
+
+If you download the image, do NOT run the setup script (or it will rebuild the image). Instead you need to additionally run
+```bash
+echo "docker" > ".mode"
+```
 
 ### Docker-less setup
 
 If you don't have access to docker, there is an alternative setup that uses the package manager uv. \
-Follow the [instructions](https://docs.astral.sh/uv/getting-started/installation/) to install uv, then run the script `setup.sh`.
+Follow the [instructions](https://docs.astral.sh/uv/getting-started/installation/) to install uv, then run the script `setup.sh`. \
+This will create a virtual environment and install the same python dependencies as the docker version.
 
 > [!NOTE]
 > If you also have docker installed, it will be prioritized by `setup.sh`. \
@@ -41,7 +51,9 @@ Follow the [instructions](https://docs.astral.sh/uv/getting-started/installation
 > ./setup.sh uv
 > ```
 
-If you wish to compile the slides, you will also have to separately install the [typst compiler](https://typst.app/open-source/).
+If you wish to compile the slides (or the other .typ files), you will also have to separately install the [Typst compiler](https://typst.app/open-source/) (it is already present in the docker image).
+
+You can take a look at the files in the `docker` folder to see which pinned versions had been used.
 
 
 ## Running
@@ -52,13 +64,24 @@ After installation, you can launch the project simply as
 ```
 This will either launch the docker container or the uv virtual environment, depending on the installation method.
 
+> [!TIP]
+> If you happen to have installed both, you can control which environment to run by editing the `.mode` hidden file.
+
+To exit either environment just run
+```bash
+exit
+```
+
+---
+
 You can run the experiment scripts as 
 ```bash
 python -O source/**/*.py
 ```
 Without the `-O` flag the script will be run in debug mode which is slower due to tests.
 
-In order to run the scripts you will need to download the datasets: either follow the instructions in the readmes of the `data` folder or install the [dataset release](https://github.com/HunterNise/splines-KAN/releases/tag/v1.0-data).
+In order to run the scripts you will need to download the datasets: either follow the instructions in the readmes of the `data` folder or install the [dataset release](https://github.com/HunterNise/splines-KAN/releases/tag/v1.0-data). \
+Notice that not all datasets had been actually used in the experiments.
 
 To run unit tests
 ```bash
